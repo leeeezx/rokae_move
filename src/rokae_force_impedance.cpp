@@ -188,8 +188,13 @@ public:
     {
         // 输出日志信息
         RCLCPP_INFO(this->get_logger(), "Start to cartesian impedance control");
-        this->declare_parameter("cartesian_point", "0.45 0.0 0.5 3.14154 0.0 3.14154");
-        this->declare_parameter("velocity", "0.1");
+        // 声明参数
+        this->declare_parameter("cartesian_point(command)", "0.45 0.0 0.5 3.14154 0.0 3.14154");
+        this->declare_parameter("velocity(command)", "0.1");
+        this->declare_parameter("desired_force_z", -5.0);
+        this->declare_parameter("first_time", 10.0);
+        this->declare_parameter("second_time", 10.0);
+
         // 订阅键盘输入
         keyborad = this->create_subscription<std_msgs::msg::String>("/keystroke", 10, std::bind(&Rokae_Force::keyborad_callback, this, std::placeholders::_1));
         // 发布笛卡尔位置
@@ -479,8 +484,13 @@ private:
     {
         RCLCPP_INFO(this->get_logger(), "收到键盘按下的消息---%s", msg->data.c_str());
         key = msg->data.c_str();
+        // 获取需要的参数
         this->get_parameter("cartesian_point", cartesian_points_string);
         this->get_parameter("velocity", velocity_command);
+        double desired_force = this->get_parameter("desired_force_z").as_double();
+        double first_time = this->get_parameter("first_time").as_double();
+        double second_time = this->get_parameter("second_time").as_double();
+
         cartesian_points_array = string_to_array(cartesian_points_string);
 
         switch (key[0])
@@ -501,7 +511,7 @@ private:
         case 'w':
             cout << "Misson  : Start cartesian impedance controller and press down 0.05m " << endl;
             cout << "Waiting for 1 second and pushing back 0.3m" << endl;
-            cartesian_impedance_control(20.0, -5, cartesian_points_array);
+            cartesian_impedance_control(desired_force, first_time, second_time);
             break;
         case 'e':
             move_enableDrag();
@@ -573,7 +583,7 @@ private:
 
     /** 
      * @brief 使用控制command进行轨迹控制
-     * \param 
+     * @param 
     */
     void go2cartesian(const std::array<double, 6UL> &car_vec)
     {
@@ -631,7 +641,7 @@ private:
 
 
     /**
-     *  @brief reset robot 
+     *  @brief reset robot 。自动回到设定的初始位置，如果初始位置定义改变，需要修改此函数的init_point
      */
     void move_init()
     {
@@ -654,24 +664,24 @@ private:
 
 
     /** 
-     * @brief 使用官方笛卡尔阻抗控制实现轨迹跟踪和恒力控制
-     * @param total_duration 任务持续时间
-     * @param force_in_z z方向期望力 unit:N
-     * @param car_vec 6D位姿点
+     * @brief 使用官方笛卡尔阻抗控制实现轨迹跟踪和恒力控制。测试时，需要先用较大的两段时间，以防出现碰撞等意外！！！
+     * @param desired_force_z 期望的z方向力(用于阻抗控制)
+     * @param first_time 第一段时间
+     * @param second_time 第二段时间
      */
-    void cartesian_impedance_control(double total_duration, double force_in_z, const std::array<double, 6UL> &car_vec)
+    void cartesian_impedance_control(double desired_force_z, double first_time, double second_time)
     {
         try {
             // 获取当前位置
             std::array<double, 6UL> init_position = robot->posture(rokae::CoordinateType::flangeInBase, ec);
             print(std::cout, "Current position:", init_position);
 
-            // 定义贝塞尔曲线的控制点
-            std::vector<std::array<double, 6>> controlPoints = {
-                init_position,
-                {car_vec[0], car_vec[1] - 0.3, car_vec[2] - 0.2, -2.0, car_vec[4], car_vec[5]},
-                {car_vec[0], car_vec[1] + 0.1, car_vec[2] - 0.2, 2.5, car_vec[4], car_vec[5]}
-            };
+            // 定义测试路径点。x/y/z/roll/pitch/yaw
+            std::array<double, 6> start = {0.4, 0.0, 0.5, M_PI, 0.0, M_PI};         // 起始点
+            std::array<double, 6> via_point = {0.4, 0.0, 0.3, M_PI, 0.0, M_PI};     // 中间点
+            std::array<double, 6> end = {0.4, 0.1, 0.4, M_PI, 0.0, M_PI};           // 终点
+
+            auto trajectory = TrajectoryGenerator::generateLinearSegmentPath(start, via_point, end, first_time, second_time);
 
             // 设置力控坐标系为末端坐标系。需要根据实际加装的末端工具进行调整
             // 相关数据记录：
@@ -691,10 +701,7 @@ private:
             rtCon->setCartesianImpedance({500, 500, 200, 100, 100, 100}, ec);
             
             // 设置期望力
-            rtCon->setCartesianImpedanceDesiredTorque({0, 0, force_in_z, 0, 0, 0}, ec);
-
-            // 生成轨迹
-            auto trajectory = TrajectoryGenerator::generateBezierTrajectory(controlPoints, total_duration);
+            rtCon->setCartesianImpedanceDesiredTorque({0, 0, desired_force_z, 0, 0, 0}, ec);
             
             // 启动笛卡尔阻抗控制
             rtCon->startMove(RtControllerMode::cartesianImpedance);
@@ -714,7 +721,7 @@ private:
                     
                     // 记录当前力数据
                     std::lock_guard<std::mutex> lock(force_data_mutex_);
-                    RCLCPP_INFO(this->get_logger(), "Current force in Z: %.3f N", latest_force_data_[2]);
+                    // RCLCPP_INFO(this->get_logger(), "Current force in Z: %.3f N", latest_force_data_[2]);
                 } else {
                     output.setFinished();
                     stopManually.store(false);
@@ -740,30 +747,27 @@ private:
     }
 
     /** 
-     * @brief 使用位置控制+PI控制器实现轨迹跟踪和恒力控制
-     * @param total_duration 任务持续时间
-     * @param force_in_z z方向期望力 unit:N
-     * @param car_vec 6D位姿点
+     * @brief 自己写的：使用位置控制+PI控制器实现轨迹跟踪和恒力控制
+     * @param desired_force_z 期望的z方向力(用于阻抗控制)
+     * @param first_time 第一段时间
+     * @param second_time 第二段时间
      */
-    void cartesian_force_control(double total_duration, double force_in_z, const std::array<double, 6UL> &car_vec)
+    void usr_cartesian_force_control(double desired_force_z, double first_time, double second_time)
     {
         try {
             // 获取当前位置
             std::array<double, 6UL> init_position = robot->posture(rokae::CoordinateType::flangeInBase, ec);
             print(std::cout, "Current position:", init_position);
 
-            // 定义贝塞尔曲线的控制点
-            std::vector<std::array<double, 6>> controlPoints = {
-                init_position,
-                {car_vec[0], car_vec[1] - 0.3, car_vec[2] - 0.2, -2.0, car_vec[4], car_vec[5]},
-                {car_vec[0], car_vec[1] + 0.1, car_vec[2] - 0.2, 2.5, car_vec[4], car_vec[5]}
-            };
+            // 定义测试路径点。x/y/z/roll/pitch/yaw
+            std::array<double, 6> start = {0.4, 0.0, 0.5, M_PI, 0.0, M_PI};         // 起始点
+            std::array<double, 6> via_point = {0.4, 0.0, 0.3, M_PI, 0.0, M_PI};     // 中间点
+            std::array<double, 6> end = {0.4, 0.1, 0.4, M_PI, 0.0, M_PI};           // 终点
 
-            // 生成轨迹
-            auto trajectory = TrajectoryGenerator::generateBezierTrajectory(controlPoints, total_duration);
+            auto trajectory = TrajectoryGenerator::generateLinearSegmentPath(start, via_point, end, first_time, second_time);
             
             // 初始化力控参数
-            force_controller.desired_force_z = force_in_z;
+            force_controller.desired_force_z = desired_force_z;
             force_controller.reset();
             
             // 启动位置控制模式

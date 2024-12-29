@@ -49,6 +49,9 @@ ament_target_dependencies(rokae_force  "moveit_ros_planning_interface"  rclcpp s
 add_executable(rokae_force_impedance src/rokae_force_impedance.cpp)
 ament_target_dependencies(rokae_force_impedance  "moveit_ros_planning_interface"  rclcpp std_msgs Eigen3)
 
+add_executable(test_impedance_force_node src/test_impedance_force_node.cpp)
+ament_target_dependencies(test_impedance_force_node  "moveit_ros_planning_interface"  rclcpp std_msgs Eigen3)
+
 # target_link_libraries(rokae_move ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
 # target_link_libraries(rokae_move ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
 
@@ -57,6 +60,9 @@ target_link_libraries(rokae_force ${SHARED} xMateModel)  # 与使用到的xMateM
 
 target_link_libraries(rokae_force_impedance ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
 target_link_libraries(rokae_force_impedance ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
+
+target_link_libraries(test_impedance_force_node ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
+target_link_libraries(test_impedance_force_node ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
 
 # install(
 #   DIRECTORY lib/                       # 发现你项目中的lib中所有的文件
@@ -90,6 +96,7 @@ install(
 install(TARGETS
   rokae_force
   rokae_force_impedance
+  test_impedance_force_node
   EXPORT export_${PROJECT_NAME}
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib

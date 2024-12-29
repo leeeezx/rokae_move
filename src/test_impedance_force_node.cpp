@@ -239,6 +239,15 @@ public:
             std::bind(&Rokae_Force::force_callback, this, std::placeholders::_1));
         
         RCLCPP_INFO(this->get_logger(), "已创建力传感器数据订阅者");
+
+        // 添加实时位姿数据发布者
+        realtime_pose_publisher_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
+            "realtime_robot_pose", 10);
+
+        // 创建位姿数据发布定时器(100Hz)
+        pose_timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(10),
+            std::bind(&Rokae_Force::publish_pose_timer_callback, this));
     }
     ~Rokae_Force()
     {
@@ -378,6 +387,10 @@ private:
             break;
         case '`':
             move_init();
+            break;
+        case 'r':
+            RCLCPP_INFO(this->get_logger(), "启动实时轨迹控制");
+            usr_rt_cartesian_control(5.0, 5.0);
             break;
         default:
             RCLCPP_INFO(this->get_logger(), "你在狗叫什么");
@@ -682,9 +695,100 @@ private:
         }
     }
 
+    /**
+     * @brief 实时模式纯轨迹控制
+     * @param first_time 第一段时间
+     * @param second_time 第二段时间
+     */
+    void usr_rt_cartesian_control(double first_time, double second_time)
+    {
+        try {
+            // 设置需要接收的机器人状态数据
+            std::vector<std::string> fields = {RtSupportedFields::tcpPoseAbc_m}; // 接收末端位姿数据
+            robot->startReceiveRobotState(std::chrono::milliseconds(1), fields); // 1ms采样周期
+            
+            // 获取当前位置
+            std::array<double, 6UL> init_position = robot->posture(rokae::CoordinateType::flangeInBase, ec);
+            print(std::cout, "Current position:", init_position);
+
+            // 定义三个路径点，实现先下压后平移的轨迹
+            std::array<double, 6> start = {0.4, 0.0, 0.5, M_PI, 0.0, M_PI};    // 起始点 
+            std::array<double, 6> via_point = {0.4, 0.0, 0.3, M_PI, 0.0, M_PI}; // 中间点(下压0.2m)
+            std::array<double, 6> end = {0.4, 0.3, 0.3, M_PI, 0.0, M_PI};      // 终点(平移0.3m)
+
+            auto trajectory = TrajectoryGenerator::generateLinearSegmentPath(
+                start, via_point, end, first_time, second_time);
+            
+            // 启动笛卡尔空间位置控制模式
+            rtCon->startMove(RtControllerMode::cartesianPosition);
+            
+            std::atomic<bool> stopManually{true};
+            int index = 0;
+
+            // 控制循环回调函数
+            std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
+                CartesianPosition output{};
+                
+                if (index < int(trajectory.size())) {
+                    // 获取目标轨迹点
+                    auto target_pose = trajectory[index];
+                    Utils::postureToTransArray(target_pose, output.pos);
+                    index++;
+                    
+                    // 获取实时位姿
+                    robot->updateRobotState(std::chrono::milliseconds(1));
+                    std::array<double, 6> current_pose;
+                    if(robot->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0) {
+                        // 更新最新位姿数据
+                        {
+                            std::lock_guard<std::mutex> lock(pose_data_mutex_);
+                            latest_current_pose_ = current_pose;
+                            latest_target_pose_ = target_pose;
+                        }
+                        
+                        // 保持原有的日志输出
+                        if(index % 10 == 0) {
+                            RCLCPP_INFO(this->get_logger(), 
+                                      "Target pos: x=%.3f, y=%.3f, z=%.3f\n"
+                                      "Current pos: x=%.3f, y=%.3f, z=%.3f\n"
+                                      "Position error: x=%.3f, y=%.3f, z=%.3f", 
+                                      target_pose[0], target_pose[1], target_pose[2],
+                                      current_pose[0], current_pose[1], current_pose[2],
+                                      std::abs(target_pose[0]-current_pose[0]),
+                                      std::abs(target_pose[1]-current_pose[1]), 
+                                      std::abs(target_pose[2]-current_pose[2]));
+                        }
+                    }
+                } else {
+                    output.setFinished();
+                    stopManually.store(false);
+                }
+                
+                return output;
+            };
+
+            rtCon->setControlLoop(callback);
+            rtCon->startLoop(true);
+            
+            // 停止接收机器人状态数据
+            robot->stopReceiveRobotState();
+            RCLCPP_INFO(this->get_logger(), "实时轨迹控制完成");
+
+        } catch (const std::exception &e) {
+            robot->stopReceiveRobotState(); // 确保停止接收数据
+            RCLCPP_ERROR(this->get_logger(), "实时轨迹控制错误: %s", e.what());
+        }
+    }
+
     // 添加订阅者成员变量
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr force_subscription_;
-    
+    // 添加线程相关成员变量
+    std::unique_ptr<std::thread> force_thread_;              // 力数据读取线程
+    bool force_thread_running_ = false;                      // 线程运行标志
+    std::mutex force_data_mutex_;                           // 互斥锁
+    std::condition_variable force_data_cv_;                 // 条件变量
+    std::array<double, 3> latest_force_data_{{0.0, 0.0, 0.0}}; // 最新力数据
+
     /**
      * @brief 力数据订阅回调函数，用来获取最新的力数据
      * @param msg 力数据消息
@@ -700,12 +804,46 @@ private:
         force_data_cv_.notify_one();
     }
 
-    // 添加线程相关成员变量
-    std::unique_ptr<std::thread> force_thread_;              // 力数据读取线程
-    bool force_thread_running_ = false;                      // 线程运行标志
-    std::mutex force_data_mutex_;                           // 互斥锁
-    std::condition_variable force_data_cv_;                 // 条件变量
-    std::array<double, 3> latest_force_data_{{0.0, 0.0, 0.0}}; // 最新力数据
+    // 添加发布者成员变量
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr realtime_pose_publisher_;
+    
+    // 添加成员变量存储最新的位姿数据
+    std::mutex pose_data_mutex_;
+    std::array<double, 6> latest_current_pose_{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+    std::array<double, 6> latest_target_pose_{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+    
+    // 添加位姿数据发布定时器
+    rclcpp::TimerBase::SharedPtr pose_timer_;
+
+    /**
+     * @brief 位姿数据发布定时器回调函数
+     */
+    void publish_pose_timer_callback() {
+        std::lock_guard<std::mutex> lock(pose_data_mutex_);
+        publish_realtime_pose(latest_current_pose_, latest_target_pose_);
+    }
+
+    /**
+     * @brief 发布实时位姿数据到话题
+     * @param current_pose 当前位姿
+     * @param target_pose 目标位姿
+     */
+    void publish_realtime_pose(const std::array<double, 6>& current_pose, 
+                             const std::array<double, 6>& target_pose) 
+    {
+        std_msgs::msg::Float32MultiArray msg;
+        // 将当前位姿和目标位姿打包到一起发布
+        // [current_x, current_y, current_z, target_x, target_y, target_z]
+        msg.data = {
+            static_cast<float>(current_pose[0]),
+            static_cast<float>(current_pose[1]),
+            static_cast<float>(current_pose[2]),
+            static_cast<float>(target_pose[0]),
+            static_cast<float>(target_pose[1]),
+            static_cast<float>(target_pose[2])
+        };
+        realtime_pose_publisher_->publish(msg);
+    }
 };
 
 int main(int argc, char **argv)

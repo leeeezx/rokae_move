@@ -853,7 +853,7 @@ int main(int argc, char **argv)
     // 创建节点
     auto node = std::make_shared<Rokae_Force>("rokae_force");
     
-    // 常规节点运行。如果单纯测试管道通信，注释吊spin函数。同时启用test_force_pipe函数。
+    
     rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;

@@ -746,18 +746,18 @@ private:
                             latest_target_pose_ = target_pose;
                         }
                         
-                        // 保持原有的日志输出
-                        if(index % 10 == 0) {
-                            RCLCPP_INFO(this->get_logger(), 
-                                      "Target pos: x=%.3f, y=%.3f, z=%.3f\n"
-                                      "Current pos: x=%.3f, y=%.3f, z=%.3f\n"
-                                      "Position error: x=%.3f, y=%.3f, z=%.3f", 
-                                      target_pose[0], target_pose[1], target_pose[2],
-                                      current_pose[0], current_pose[1], current_pose[2],
-                                      std::abs(target_pose[0]-current_pose[0]),
-                                      std::abs(target_pose[1]-current_pose[1]), 
-                                      std::abs(target_pose[2]-current_pose[2]));
-                        }
+                        // // 保持原有的日志输出
+                        // if(index % 10 == 0) {
+                        //     RCLCPP_INFO(this->get_logger(), 
+                        //               "Target pos: x=%.3f, y=%.3f, z=%.3f\n"
+                        //               "Current pos: x=%.3f, y=%.3f, z=%.3f\n"
+                        //               "Position error: x=%.3f, y=%.3f, z=%.3f", 
+                        //               target_pose[0], target_pose[1], target_pose[2],
+                        //               current_pose[0], current_pose[1], current_pose[2],
+                        //               std::abs(target_pose[0]-current_pose[0]),
+                        //               std::abs(target_pose[1]-current_pose[1]), 
+                        //               std::abs(target_pose[2]-current_pose[2]));
+                        // }
                     }
                 } else {
                     output.setFinished();

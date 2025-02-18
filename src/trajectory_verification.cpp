@@ -111,8 +111,14 @@ private:
     }
 
 public:
-    static void verifyLinearSegmentPath() {
+    /**
+     * @brief 生成两段线性轨迹，最终合成一段轨迹并输出为csv文件。可以通过设置起始点、中间点和终点来验证生成的轨迹是否符合预期。
+     * @param durationOne 第一段轨迹持续时间
+     * @param durationTwo 第二段轨迹持续时间
+     */
+    static void verifyLinearSegmentPath_two(double durationOne=2.0, double durationTwo=3.0) {
         // 定义测试路径点
+        // 测试过的路径点保存在了本项目rokae_move/example/trajectoryPoint.md文件中
         std::array<double, 6> start = {0.4, 0.0, 0.5, M_PI, 0.0, M_PI};  // 起始点
         std::array<double, 6> via_point = {0.4, 0.0, 0.4, M_PI, 0.0, M_PI};  // 中间点
         std::array<double, 6> end = {0.4, 0.3, 0.4, M_PI, 0.0, M_PI};  // 终点
@@ -136,8 +142,8 @@ public:
         };
 
         // 生成轨迹
-        auto trajectory1 = generateBezierTrajectory(controlPoints1, 2.0);  // 2秒下压
-        auto trajectory2 = generateBezierTrajectory(controlPoints2, 3.0);  // 3秒滑移
+        auto trajectory1 = generateBezierTrajectory(controlPoints1, durationOne);  // 2秒下压
+        auto trajectory2 = generateBezierTrajectory(controlPoints2, durationTwo);  // 3秒滑移
 
         // 合并轨迹
         trajectory1.insert(trajectory1.end(), trajectory2.begin(), trajectory2.end());
@@ -145,10 +151,36 @@ public:
         // 保存轨迹数据到CSV文件
         saveTrajectoryToFile(trajectory1, "trajectory_data.csv");
     }
+
+
+    /**
+     * @brief 生成一段线性轨迹，最终输出为csv文件。可以通过设置起始点和终点来验证生成的轨迹是否符合预期。
+     * @param duration 轨迹持续时间
+     */
+    static void verifyLinearSegmentPath_one(double duration = 2.0) {
+        // 定义测试路径点
+        std::array<double, 6> start = {0.4, 0.0, 0.5, M_PI, 0.0, M_PI};    // 起始点
+        std::array<double, 6> end = {0.4, 0.0, 0.3, M_PI, 0.0, M_PI};      // 终点
+
+        // 使用5个控制点强制直线运动
+        std::vector<std::array<double, 6>> controlPoints = {
+            start,
+            start,
+            start,
+            end,
+            end
+        };
+
+        // 生成轨迹
+        auto trajectory = generateBezierTrajectory(controlPoints, duration);
+
+        // 保存轨迹数据到CSV文件
+        saveTrajectoryToFile(trajectory, "single_trajectory_data.csv");
+    }
 };
 
 int main() {
-    TrajectoryVerification::verifyLinearSegmentPath();
+    TrajectoryVerification::verifyLinearSegmentPath_one();
     return 0;
 }
-
+// g++ -o trajectory_verification src/trajectory_verification.cpp -I/opt/ros/foxy/include 这是编译命令

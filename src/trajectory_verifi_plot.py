@@ -7,7 +7,7 @@ from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
 
 # 读取CSV数据
-df = pd.read_csv(r'/home/le/dev_ws/src/rokae_move/trajectory_data.csv')
+df = pd.read_csv(r'/home/le/dev_ws/src/rokae_move/single_trajectory_data.csv')
 
 # 创建3D图
 fig = plt.figure()

@@ -142,83 +142,40 @@ class AsciiSendModel:
                 time.sleep(0.005)  # 等待时间，可根据需要调整
 
 
-class ThreeAxisForceSensor:
-    """
-    三维力传感器类。如果需要更多维度传感器，可以基于此类进行修改。
-    """
-    def __init__(self, port_x=None, port_y=None, port_z=None):
-        """
-        初始化三维力传感器参数
-
-        :param port_x: x轴串口名称
-        :param port_y: y轴串口名称
-        :param port_z: z轴串口名称
-        """
-        self.sensors = {
-            'x': AsciiSendModel(port_name=port_x),
-            'y': AsciiSendModel(port_name=port_y),
-            'z': AsciiSendModel(port_name=port_z)
-        }
-        
-    def close(self):
-        """
-        关闭所有串口
-        """
-        for sensor in self.sensors.values():
-            sensor.close()
-
 # 删除原有的PipeTransmitter类,替换为ROS2发布者节点
 class ForceSensorPublisher(Node):
-    def __init__(self, three_axis_sensor):
-        """
-        初始化ROS2发布者节点名称
-
-        :param three_axis_sensor: 三维力传感器对象(使用选中的力传感器类，创建力传感器实例后，传入对应的实例对象)
-        """
+    def __init__(self, ascii_model):
+        # 初始化ROS2发布者节点名称
         super().__init__('force_sensor_publisher')
         self.publisher = self.create_publisher(Float32MultiArray, 'force_sensor_data', 10)
-        self.sensor = three_axis_sensor
-        self.force_data = {'x': 0.0, 'y': 0.0, 'z': 0.0}
+        self.ascii_model = ascii_model
         
-    def read_and_publish(self):
-        """读取并发布三轴力数据"""
-        while rclpy.ok():
+    def run(self):
+        for report in self.ascii_model.read_sensor_data():
+            if not rclpy.ok():
+                break
+                
             try:
-                # 读取三个方向的数据
-                for axis, sensor in self.sensor.sensors.items():
-                    for report in sensor.read_sensor_data():
-                        try:
-                            self.force_data[axis] = float(report)
-                            break  # 获取到一个有效数据就继续下一个轴
-                        except ValueError as e:
-                            self.get_logger().warn(f'{axis}轴数据转换错误: {e}')
-                
-                # 发布三轴数据
+                force_value = float(report)
                 msg = Float32MultiArray()
-                msg.data = [self.force_data['x'], self.force_data['y'], self.force_data['z']]
+                msg.data = [0.0, 0.0, force_value]  # 将z方向力值放在index 2
                 self.publisher.publish(msg)
-                
-            except Exception as e:
-                self.get_logger().error(f'数据读取或发布错误: {e}')
+            except ValueError as e:
+                self.get_logger().error(f'在ros节点处数据转换错误: {e}')
 
 
 def main():
-    # 创建三轴力传感器实例
-    sensor = ThreeAxisForceSensor(
-        port_x='/dev/ttyUSB0',
-        port_y='/dev/ttyUSB1',
-        port_z='/dev/ttyUSB2'
-    )
+    rclpy.init()
     
-    # 创建发布者节点
-    publisher = ForceSensorPublisher(sensor)
+    ascii_model = AsciiSendModel(port_name='/dev/ttyUSB2', baudrate=115200)
+    publisher = ForceSensorPublisher(ascii_model)
     
     try:
-        publisher.read_and_publish()
+        publisher.run()
     except KeyboardInterrupt:
         pass
     finally:
-        sensor.close()
+        ascii_model.close()
         rclpy.shutdown()
 
 

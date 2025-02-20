@@ -1,6 +1,10 @@
-/**
- * @file 将管道传输改为ros2话题传输
- */
+/*
+文件名: test_impedance_force_node.cpp
+作者: 乐正祥
+创建日期: 忘记了 // 请根据实际修改更新
+修改日期: 2025-02-18
+描述: 
+*/
 // rclcpp库
 #include "rclcpp/rclcpp.hpp"
 // 基本消息类型库
@@ -152,7 +156,98 @@ public:
         return trajectory;
     }    
 
+
+    /**
+     * @brief 四阶段侵入轨迹生成（空中加速+匀速侵入+减速缓冲+最终停止）
+     * @param start 起始点
+     * @param air_dist 空中加速段长度（到沙土表面的距离）
+     * @param cruise_dist 匀速侵入段长度 
+     * @param decel_dist 减速缓冲段长度
+     * @param target_speed 目标侵入速度
+     */
+    static std::vector<std::array<double, 6>> generateFourPhasePath(
+        const std::array<double, 6>& start,
+        double air_dist,
+        double cruise_dist,
+        double decel_dist,
+        double target_speed)
+    {
+        // 参数校验
+        if(air_dist <= 0 || cruise_dist <= 0 || decel_dist <= 0)
+            throw std::invalid_argument("距离参数必须为正数");
+
+        // 使用固定时间步长进行欧拉积分仿真
+        double dt = 0.001;
+        std::vector<std::array<double, 6>> trajectory;
+        
+        // 初始状态：位置、速度均为0（沿z方向运动，朝下为正位移）为了方便计算假设向下速度为正。加速时加速度是正值
+        double pos = 0.0;      // 从起始点到当前的累计位移
+        double v = 0.0;        // 当前速度
+        auto point = start;
+        trajectory.push_back(point);
+        
+        //
+        // 阶段1：空中加速（从0加速到 target_speed）
+        //
+        // 根据公式： v^2 = 2 * a1 * air_dist  =>  a1 = target_speed^2/(2*air_dist)
+        double a1 = target_speed * target_speed / (2 * air_dist);
+        // 加速所需时间 t1 = target_speed / a1
+        double t1 = target_speed / a1;
+        for(double t = 0; t < t1; t += dt) {
+            v += a1 * dt;       // 累计加速
+            pos += v * dt;      // 更新位移
+            point = start;
+            // 注意：这里假设运动方向为沿z轴负方向，所以减去位移
+            point[2] = start[2] - pos;
+            trajectory.push_back(point);
+        }
+        
+        //
+        // 阶段2：匀速运动（以 target_speed 匀速前进 cruise_dist）
+        //
+        v = target_speed; // 保持匀速
+        double cruise_time = cruise_dist / target_speed;
+        for(double t = 0; t < cruise_time; t += dt) {
+            pos += v * dt;
+            point = start;
+            point[2] = start[2] - pos;
+            trajectory.push_back(point);
+        }
+        
+        //
+        // 阶段3：减速缓冲（从 target_speed 减速到0）
+        //
+        // 根据公式： 0 = target_speed^2 - 2 * a3 * decel_dist  =>  a3 = target_speed^2/(2*decel_dist)
+        double a3 = target_speed * target_speed / (2 * decel_dist);
+        // 开始减速，使用 while 循环直到缓冲段累计位移达到 decel_dist
+        double decel_pos = 0.0;  // 本阶段累计位移
+        v = target_speed;
+        while(decel_pos < decel_dist) {
+            v -= a3 * dt;
+            if(v < 0) {
+                v = 0;
+            }
+            double dp = v * dt;
+            decel_pos += dp;
+            pos += dp;
+            point = start;
+            point[2] = start[2] - pos;
+            trajectory.push_back(point);
+        }
+        
+        // 最终位置补偿：确保最终位姿精确
+        double final_z = start[2] - (air_dist + cruise_dist + decel_dist);
+        if (std::abs(trajectory.back()[2] - final_z) > 1e-3) {
+            point = trajectory.back();
+            point[2] = final_z;
+            trajectory.push_back(point);
+        }
+        
+        return trajectory;
+    }
+
 private:
+
     static double smoothTrajectory(double t, double total_duration)
     {
         if (t <= 0)
@@ -168,6 +263,7 @@ private:
         double normalizedPosition = smoothTrajectory(t, total_duration);
         return start + (end - start) * normalizedPosition;
     }
+
     static std::array<double, 6> bezierInterpolate(
         const std::vector<std::array<double, 6>> &points,
         double t,
@@ -214,13 +310,41 @@ public:
     Rokae_Force(std::string name) : Node(name)
     {
         // 输出日志信息
-        RCLCPP_INFO(this->get_logger(), "Start to cartesian impedance control");
+        // RCLCPP_INFO(this->get_logger(), "Start to cartesian impedance control");
+
+        /*
+        * @brief 通用浮点参数描述生成器
+        * @param desc 人类可读名称
+        * @param resize 浮点范围约束
+        * @param min 最小值
+        * @param max 最大值
+        * @param step 调整步长
+        */
+        auto floatDesc = [](const std::string& desc, double min, double max, double step) {
+            rcl_interfaces::msg::ParameterDescriptor d;
+            d.description = desc;
+            d.floating_point_range.resize(1);
+            d.floating_point_range[0].from_value = min;
+            d.floating_point_range[0].to_value = max;
+            d.floating_point_range[0].step = step;
+            return d;
+        };
         // 声明参数
         this->declare_parameter("cartesian_point(command)", "0.45 0.0 0.5 3.14154 0.0 3.14154");
         this->declare_parameter("velocity(command)", "0.1");
         this->declare_parameter("desired_force_z", -5.0);
+
         this->declare_parameter("first_time", 10.0);
         this->declare_parameter("second_time", 10.0);
+
+        this->declare_parameter("air_distance", 0.1, 
+            floatDesc("空中加速段距离（米）", 0.01, 1.0, 0.01));       //空中加速段距离
+        this->declare_parameter("cruise_distance", 0.1,
+            floatDesc("匀速侵入段距离（米）", 0.01, 1.0, 0.01));    //匀速侵入段距离
+        this->declare_parameter("decel_distance", 0.1,
+            floatDesc("减速缓冲段距离（米）", 0.01, 1.0, 0.01));     //减速缓冲段距离
+        this->declare_parameter("target_speed", 0.1,
+            floatDesc("期望侵入速度（米/秒）", 0.01, 2.5, 0.01));   //期望侵入速度
 
         // 订阅键盘输入
         keyborad = this->create_subscription<std_msgs::msg::String>("/keystroke", 10, std::bind(&Rokae_Force::keyborad_callback, this, std::placeholders::_1));
@@ -372,15 +496,24 @@ private:
      */
     std::string keyborad_callback(const std_msgs::msg::String::SharedPtr msg)
     {
-        RCLCPP_INFO(this->get_logger(), "收到键盘按下的消息---%s", msg->data.c_str());
-        key = msg->data.c_str();
         // 获取需要的参数
         this->get_parameter("cartesian_point", cartesian_points_string);
         this->get_parameter("velocity", velocity_command);
+
         double desired_force = this->get_parameter("desired_force_z").as_double();
+
         double first_time = this->get_parameter("first_time").as_double();
         double second_time = this->get_parameter("second_time").as_double();
 
+        double air_dist = this->get_parameter("air_distance").as_double();
+        double cruise_dist = this->get_parameter("cruise_distance").as_double();
+        double decel_dist = this->get_parameter("decel_distance").as_double();
+        double target_speed = this->get_parameter("target_speed").as_double();
+        // 收到键盘消息
+        RCLCPP_INFO(this->get_logger(), "收到键盘按下的消息---%s", msg->data.c_str());
+        key = msg->data.c_str();
+        
+        // 将为了rqt的字符串形式转换为可用的参数形式
         cartesian_points_array = string_to_array(cartesian_points_string);
 
         switch (key[0])
@@ -415,6 +548,10 @@ private:
         case 'r':
             RCLCPP_INFO(this->get_logger(), "启动实时轨迹控制");
             usr_rt_cartesian_control(10.0, 10.0);
+            break;
+        case 'v':
+            RCLCPP_INFO(this->get_logger(), "启动速度控制");
+            usr_rt_cartesian_v_control(air_dist, cruise_dist, decel_dist, target_speed);
             break;
         default:
             RCLCPP_INFO(this->get_logger(), "你在狗叫什么");
@@ -720,7 +857,7 @@ private:
     }
 
     /**
-     * @brief 实时模式纯轨迹控制
+     * @brief 实时模式纯轨迹控制，速度不可控
      * @param first_time 第一段时间
      * @param second_time 第二段时间
      */
@@ -811,6 +948,108 @@ private:
         }
     }
 
+    /**
+     * @brief 实时模式纯轨迹控制，速度可控
+     * @param ari_dist 空中加速段距离
+     * @param cruise_dist 匀速侵入段距离
+     * @param decel_dist 减速缓冲段距离
+     * @param target_speed 期望侵入速度
+     * @
+     */
+    void usr_rt_cartesian_v_control(double air_dist, double cruise_dist, double decel_dist, double target_speed)
+    {
+        try {
+            // 参数校验，传入的距离和速度必须大于等于0
+            if(air_dist <= 0 || cruise_dist <= 0 || decel_dist <= 0 || target_speed <= 0) {
+                RCLCPP_ERROR(this->get_logger(), "无效的传入参数，立即检查速度控制的传入参数!");
+                return;
+            }
+
+            // 停止初始位资发布（因为只需要让plojuggler读取到）
+            pose_timer_->cancel();
+
+            // 设置需要接收的机器人状态数据
+            std::vector<std::string> fields = {RtSupportedFields::tcpPoseAbc_m}; // 接收末端位姿数据
+            robot->startReceiveRobotState(std::chrono::milliseconds(1), fields); // 1ms采样周期
+            
+            // 获取当前位置
+            std::array<double, 6UL> start = robot->posture(rokae::CoordinateType::flangeInBase, ec);
+            print(std::cout, "当前初始位置：", start);
+
+            auto trajectory = TrajectoryGenerator::generateFourPhasePath(
+                start, 
+                air_dist,
+                cruise_dist,
+                decel_dist,
+                target_speed
+            );
+            
+            // 启动笛卡尔空间位置控制模式
+            rtCon->startMove(RtControllerMode::cartesianPosition);
+            
+            std::atomic<bool> stopManually{true};
+            int index = 0;
+
+            // 控制循环回调函数
+            // CartesianPosition output{}是给output进行类型定义
+            std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
+                CartesianPosition output{};
+
+                RCLCPP_INFO(this->get_logger(), "进入回调函数1");
+
+                if (index < int(trajectory.size())) {
+                    // 获取目标轨迹点。这里的target_pose是当前的理论轨迹规划点
+                    auto target_pose = trajectory[index];
+                    Utils::postureToTransArray(target_pose, output.pos);
+                    RCLCPP_INFO(this->get_logger(), "轨迹控制2");
+                    
+                    // 获取实时位姿
+                    // robot->updateRobotState(std::chrono::milliseconds(1));
+                    std::array<double, 6> current_pose;
+                    if(robot->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0) {
+                        RCLCPP_INFO(this->get_logger(), "更新位姿信息3: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
+                                    current_pose[0], current_pose[1], current_pose[2],
+                                    current_pose[3], current_pose[4], current_pose[5]);
+                        // 更新最新位姿数据
+                        std::lock_guard<std::mutex> lock(pose_data_mutex_);
+                        latest_current_pose_ = current_pose;
+                        latest_target_pose_ = target_pose;
+
+                        publish_realtime_pose(latest_current_pose_, latest_target_pose_);
+                    }
+
+                    index++;
+                } else {
+                    // 标记任务完成
+                    output.setFinished(); 
+                    stopManually.store(false);
+                }
+                
+                return output;
+            };
+
+            rtCon->setControlLoop(callback, 0, true);
+            rtCon->startLoop(false);
+
+            // 控制循环
+            while(stopManually.load()) {
+                // std::this_thread::sleep_for(std::chrono::milliseconds(1)); 
+            }
+            
+            // 停止接收机器人状态数据
+            rtCon->stopLoop();
+            rtCon->stopMove();
+            robot->stopReceiveRobotState();
+            pose_timer_->reset();
+            RCLCPP_INFO(this->get_logger(), "实时轨迹控制完成");
+
+        } catch (const std::exception &e) {
+            pose_timer_->reset();
+            robot->stopReceiveRobotState(); // 确保停止接收数据
+            RCLCPP_ERROR(this->get_logger(), "实时轨迹控制错误: %s", e.what());
+        }
+    }
+
     // 添加订阅者成员变量
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr force_subscription_;
     // 添加线程相关成员变量
@@ -847,7 +1086,8 @@ private:
     rclcpp::TimerBase::SharedPtr pose_timer_;
 
     /**
-     * @brief 发布实时位姿数据到话题
+     * @brief 发布实时位姿数据到话题。本质上是发布current_pose的前三位和target_pose的前三位，组成一个六位数据，
+     *        可以自定义传入参数从而改变发送数据。
      * @param current_pose 当前位姿
      * @param target_pose 目标位姿
      */

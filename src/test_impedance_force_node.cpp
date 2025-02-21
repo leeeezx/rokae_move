@@ -222,7 +222,7 @@ public:
         // 开始减速，使用 while 循环直到缓冲段累计位移达到 decel_dist
         double decel_pos = 0.0;  // 本阶段累计位移
         v = target_speed;
-        while(decel_pos < decel_dist) {
+        while(decel_pos < decel_dist && v > 1e-6) {
             v -= a3 * dt;
             if(v < 0) {
                 v = 0;
@@ -243,6 +243,8 @@ public:
             trajectory.push_back(point);
         }
         
+        std::cout << "四段轨迹生成完成" << std::endl;
+
         return trajectory;
     }
 
@@ -315,7 +317,6 @@ public:
         /*
         * @brief 通用浮点参数描述生成器
         * @param desc 人类可读名称
-        * @param resize 浮点范围约束
         * @param min 最小值
         * @param max 最大值
         * @param step 调整步长
@@ -337,13 +338,13 @@ public:
         this->declare_parameter("first_time", 10.0);
         this->declare_parameter("second_time", 10.0);
 
-        this->declare_parameter("air_distance", 0.1, 
+        this->declare_parameter("air_distance", 0.12, 
             floatDesc("空中加速段距离（米）", 0.01, 1.0, 0.01));       //空中加速段距离
-        this->declare_parameter("cruise_distance", 0.1,
+        this->declare_parameter("cruise_distance", 0.05,
             floatDesc("匀速侵入段距离（米）", 0.01, 1.0, 0.01));    //匀速侵入段距离
-        this->declare_parameter("decel_distance", 0.1,
+        this->declare_parameter("decel_distance", 0.02,
             floatDesc("减速缓冲段距离（米）", 0.01, 1.0, 0.01));     //减速缓冲段距离
-        this->declare_parameter("target_speed", 0.1,
+        this->declare_parameter("target_speed", 0.05,
             floatDesc("期望侵入速度（米/秒）", 0.01, 2.5, 0.01));   //期望侵入速度
 
         // 订阅键盘输入

@@ -13,13 +13,14 @@ endif()
 link_libraries(stdc++fs)  # 链接filesystem库
 
 # ************* 以下内容为手动添加部分 *****************
-include_directories(include) # 添加项目中的include文件夹路径
+include_directories(include) # 添加项目中的include文件夹路径。指定头文件（.h 或 .hpp）的搜索路径。
 include_directories(external)# 添加项目中的external文件夹路径
-link_directories(lib)# 添加项目中的lib文件夹路径
+link_directories(lib)# 添加项目中的lib文件夹路径。指定库文件（.a 或 .so）的搜索路径。
 # ************* 以下内容为手动添加结束 *****************
 
 # find dependencies
 find_package(Eigen3 REQUIRED) 
+find_package(tf2 REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -39,9 +40,8 @@ if(BUILD_TESTING)
 endif()
 
 
-# add_executable(rokae_move src/rokae_move.cpp)
-# ament_target_dependencies(rokae_move  rclcpp std_msgs Eigen3)
 
+# ********************添加可执行文件
 add_executable(rokae_force src/rokae_force.cpp)
 ament_target_dependencies(rokae_force  "moveit_ros_planning_interface"  rclcpp std_msgs Eigen3)
 # ament_target_dependencies(rokae_force  "moveit_ros_planning_interface" "moveit_visual_tools" rclcpp std_msgs Eigen3)
@@ -52,8 +52,6 @@ ament_target_dependencies(rokae_force_impedance  "moveit_ros_planning_interface"
 add_executable(test_impedance_force_node src/test_impedance_force_node.cpp)
 ament_target_dependencies(test_impedance_force_node  "moveit_ros_planning_interface"  rclcpp std_msgs Eigen3)
 
-# target_link_libraries(rokae_move ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
-# target_link_libraries(rokae_move ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
 
 target_link_libraries(rokae_force ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
 target_link_libraries(rokae_force ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
@@ -64,26 +62,6 @@ target_link_libraries(rokae_force_impedance ${SHARED} xMateModel)  # 与使用�
 target_link_libraries(test_impedance_force_node ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
 target_link_libraries(test_impedance_force_node ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
 
-# install(
-#   DIRECTORY lib/                       # 发现你项目中的lib中所有的文件
-#   DESTINATION lib/${PROJECT_NAME}      # 拷贝到install目录中
-# )
-# install(
-#   DIRECTORY external/                       # 发现你项目中的lib中所有的文件
-#   DESTINATION external/${PROJECT_NAME}      # 拷贝到install目录中
-# )
-# # install(TARGETS
-# #   rokae_move
-# #   DESTINATION lib/${PROJECT_NAME}
-# # )
-# install(TARGETS
-#   rokae_force
-#   DESTINATION lib/${PROJECT_NAME}
-# )
-# install(TARGETS
-#   rokae_force_impedance
-#   DESTINATION lib/${PROJECT_NAME}
-# )
 
 install(
   DIRECTORY 

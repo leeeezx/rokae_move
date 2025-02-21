@@ -8,8 +8,10 @@
 #include <cmath>
 #include <fstream>
 #include <tf2/LinearMath/Quaternion.h>
+// #include </opt/ros/foxy/include/tf2/LinearMath/Quaternion.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <string>
+#include <fmt/format.h>
 
 // 四元数转欧拉角
 std::array<double, 3> quaternion_to_euler(const tf2::Quaternion &q) {
@@ -27,6 +29,12 @@ tf2::Quaternion euler_to_quaternion(double roll, double pitch, double yaw) {
 
 class TrajectoryVerification {
 private:
+    // 新增速度数据结构
+    struct TrajectoryPoint {
+        std::array<double, 6> pose;  // x,y,z,roll,pitch,yaw
+        std::array<double, 3> velocity; // vx,vy,vz
+    };
+
     static double smoothTrajectory(double t, double total_duration) {
         if (t <= 0) return 0;
         if (t >= total_duration) return 1;
@@ -110,6 +118,111 @@ private:
         std::cout << "轨迹数据已保存到: " << filename << std::endl;
     }
 
+    // 修改后的保存函数
+    static void saveTrajectoryToFileWithV(const std::vector<TrajectoryPoint>& trajectory, 
+                                   const std::string& filename) 
+    {
+        std::ofstream file(filename);
+        file << "x,y,z,roll,pitch,yaw,vx,vy,vz\n";
+
+        for (const auto& point : trajectory) {
+            // file << fmt::format("{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f},{:.6f}\n",
+            //     point.pose[0], point.pose[1], point.pose[2],
+            //     point.pose[3], point.pose[4], point.pose[5],
+            //     point.velocity[0], point.velocity[1], point.velocity[2]);
+            file << point.pose[0] << "," << point.pose[1] << "," << point.pose[2] << ","
+                 << point.pose[3] << "," << point.pose[4] << "," << point.pose[5] << ","
+                 << point.velocity[0] << "," << point.velocity[1] << "," << point.velocity[2] << "\n";
+        }
+
+        std::cout << "轨迹数据已保存到: " << filename << std::endl;
+    }
+
+
+    /**
+     * @brief 四阶段侵入轨迹生成（空中加速+匀速侵入+减速缓冲+最终停止）
+     * @param start 起始点
+     * @param air_dist 空中加速段长度（到沙土表面的距离）
+     * @param cruise_dist 匀速侵入段长度 
+     * @param decel_dist 减速缓冲段长度
+     * @param target_speed 目标侵入速度
+     */
+    static std::vector<TrajectoryPoint> generateFourPhasePath(
+        const std::array<double, 6>& start,
+        double air_dist,
+        double cruise_dist,
+        double decel_dist,
+        double target_speed)
+    {
+        // 新增参数校验
+        if (target_speed <= 0 || air_dist <=0 || cruise_dist <0 || decel_dist <=0) {
+            throw std::invalid_argument("参数必须为正数");
+        }
+
+        std::vector<TrajectoryPoint> trajectory;
+        double dt = 0.001;
+        double pos = 0.0;
+        double v = 0.0;
+
+        // 阶段1：空中加速
+        double a1 = target_speed * target_speed / (2 * air_dist);
+        double t1 = target_speed / a1;
+        for(double t = 0; t < t1; t += dt) {
+            TrajectoryPoint point;
+            point.pose = start;
+            v += a1 * dt;
+            pos += v * dt;
+            point.pose[2] = start[2] - pos;
+            point.velocity = {0, 0, v}; // 假设只有z轴运动
+            trajectory.push_back(point);
+        }
+
+        // 阶段2：匀速
+        double cruise_time = cruise_dist / target_speed;
+        for(double t = 0; t < cruise_time; t += dt) {
+            TrajectoryPoint point;
+            point.pose = start;
+            pos += target_speed * dt;
+            point.pose[2] = start[2] - pos;
+            point.velocity = {0, 0, target_speed};
+            trajectory.push_back(point);
+        }
+
+        std::cout << "阶段2结束时轨迹点数量：" << trajectory.size() << std::endl;
+
+        // 阶段3：减速
+        double a3 = target_speed * target_speed / (2 * decel_dist);
+        double decel_pos = 0.0;
+        v = target_speed;
+        while(decel_pos < decel_dist && v > 1e-6) {
+            TrajectoryPoint point;
+            point.pose = start;
+            v -= a3 * dt;
+            if(v < 0) v = 0;
+            double dp = v * dt;
+            decel_pos += dp;
+            pos += dp;
+            point.pose[2] = start[2] - pos;
+            point.velocity = {0, 0, v};
+            trajectory.push_back(point);
+            auto& last = trajectory.back();
+
+            std::cout << "减速阶段位置：" << last.pose[2] << std::endl;
+        }
+        
+        std::cout << "四段轨迹生成（没有最终位置修正）" << std::endl;
+
+        // 最终位置修正
+        if (!trajectory.empty()) {
+            auto& last = trajectory.back();
+            double final_z = start[2] - (air_dist + cruise_dist + decel_dist);
+            last.pose[2] = final_z;
+            last.velocity = {0, 0, 0};
+        }
+
+        std::cout << "四段轨迹生成完成" << std::endl;
+        return trajectory;
+    }
 public:
     /**
      * @brief 生成两段线性轨迹，最终合成一段轨迹并输出为csv文件。可以通过设置起始点、中间点和终点来验证生成的轨迹是否符合预期。
@@ -177,10 +290,17 @@ public:
         // 保存轨迹数据到CSV文件
         saveTrajectoryToFile(trajectory, "single_trajectory_data.csv");
     }
+
+    // 新增验证接口
+    static void verifyFourPhase() {
+        std::array<double, 6> start = {0.4, 0.0, 0.5, M_PI, 0.0, M_PI};
+        auto trajectory = generateFourPhasePath(start, 0.2, 0.1, 0.05, 0.5);
+        saveTrajectoryToFileWithV(trajectory, "/home/le/dev_ws/src/rokae_move/build/data/four_phase_trajectory.csv");
+    }
 };
 
 int main() {
-    TrajectoryVerification::verifyLinearSegmentPath_one();
+    TrajectoryVerification::verifyFourPhase();
     return 0;
 }
 // g++ -o trajectory_verification src/trajectory_verification.cpp -I/opt/ros/foxy/include 这是编译命令

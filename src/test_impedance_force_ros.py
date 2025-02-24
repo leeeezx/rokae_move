@@ -9,7 +9,8 @@ import time
 import struct
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import Float32MultiArray
+from std_msgs.msg import Float32MultiArray, Float32
+import argparse
 
 
 # 配置日志
@@ -69,6 +70,8 @@ class AsciiSendModel:
             timeout=self.timeout
         )
 
+        logger.info(f"串口 {self.port_name} 已打开")
+
     def close(self) -> None:
         """显式关闭串口"""
         if hasattr(self, 'ser') and self.ser.is_open:
@@ -103,7 +106,8 @@ class AsciiSendModel:
         buffer = bytearray()  # 创建空的字节串
         reports = []  # 创建报文空列表
 
-        while True:                     # 进入数据处理循环
+        # 进入数据处理循环
+        while True:                     
             # 读取新数据并添加到buffer
             if self.ser.in_waiting:     # 如果串口中有数据等待
                 # print('串口有数据')
@@ -130,12 +134,12 @@ class AsciiSendModel:
                     yield decoded_data  # 生成器，每次返回一个报文    
                         # reports = []
                 except UnicodeDecodeError as e:
-                    logging.error(f"解码错误：{e}，丢弃无效数据")
+                    logging.error(f"解码错误 on {self.port_name}：{e}，丢弃无效数据")
 
             # 如果buffer过大，可能表示数据积压，清理旧数据
             if len(buffer) > chunk_size * 2:
                 buffer = buffer[-chunk_size:]
-                logger.warning("数据积压，清理旧数据")
+                logger.warning(f"数据积压 on {self.port_name}")
 
             # 如果没有足够的报文，短暂等待更多数据到达
             if not reports:
@@ -144,12 +148,13 @@ class AsciiSendModel:
 
 # 删除原有的PipeTransmitter类,替换为ROS2发布者节点
 class ForceSensorPublisher(Node):
-    def __init__(self, ascii_model):
+    def __init__(self, ascii_model, axis: str):
         # 初始化ROS2发布者节点名称
-        super().__init__('force_sensor_publisher')
-        self.publisher = self.create_publisher(Float32MultiArray, 'force_sensor_data', 10)
+        super().__init__(f'force_sensor_{axis}publisher')
+        self.publisher = self.create_publisher(Float32 , f'force_{axis}_data', 10)
         self.ascii_model = ascii_model
-        
+        self.axis = axis
+
     def run(self):
         for report in self.ascii_model.read_sensor_data():
             if not rclpy.ok():
@@ -157,18 +162,26 @@ class ForceSensorPublisher(Node):
                 
             try:
                 force_value = float(report)
-                msg = Float32MultiArray()
-                msg.data = [0.0, 0.0, force_value]  # 将z方向力值放在index 2
+                msg = Float32()
+                msg.data = force_value  
                 self.publisher.publish(msg)
+
+                self.get_logger().info(f"发布 {self.axis} 轴力数据: {force_value}")
             except ValueError as e:
-                self.get_logger().error(f'在ros节点处数据转换错误: {e}')
+                self.get_logger().error(f"数据转换错误 on {self.axis}: {e}")
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Publish force sensor data to ROS2 topic")
+    parser.add_argument('--port', type=str, choices=['/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2'], required=True, help='Serial port name (e.g., /dev/ttyUSB0 or COM1)')
+    parser.add_argument('--axis', type=str, choices=['x', 'y', 'z'], required=True, help='Axis to publish (x, y, or z)')
+    args = parser.parse_args()
+
     rclpy.init()
     
-    ascii_model = AsciiSendModel(port_name='/dev/ttyUSB2', baudrate=115200)
-    publisher = ForceSensorPublisher(ascii_model)
+    ascii_model = AsciiSendModel(port_name=args.port, baudrate=115200)
+    
+    publisher = ForceSensorPublisher(ascii_model, args.axis)
     
     try:
         publisher.run()
@@ -181,3 +194,7 @@ def main():
 
 if __name__ == '__main__':
     main()
+    # 命令行运行示例：
+    # python force_sensor_node.py --port /dev/ttyUSB0 --axis x
+    # python force_sensor_node.py --port /dev/ttyUSB1 --axis y
+    # python force_sensor_node.py --port /dev/ttyUSB2 --axis z

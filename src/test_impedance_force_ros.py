@@ -166,7 +166,7 @@ class ForceSensorPublisher(Node):
                 msg.data = force_value  
                 self.publisher.publish(msg)
 
-                self.get_logger().info(f"发布 {self.axis} 轴力数据: {force_value}")
+                # self.get_logger().info(f"发布 {self.axis} 轴力数据: {force_value}")
             except ValueError as e:
                 self.get_logger().error(f"数据转换错误 on {self.axis}: {e}")
 
@@ -195,6 +195,6 @@ def main():
 if __name__ == '__main__':
     main()
     # 命令行运行示例：
-    # python force_sensor_node.py --port /dev/ttyUSB0 --axis x
-    # python force_sensor_node.py --port /dev/ttyUSB1 --axis y
-    # python force_sensor_node.py --port /dev/ttyUSB2 --axis z
+    # python3 src/test_impedance_force_ros.py --port /dev/ttyUSB0 --axis x
+    # python3 src/test_impedance_force_ros.py --port /dev/ttyUSB1 --axis y
+    # python3 src/test_impedance_force_ros.py --port /dev/ttyUSB2 --axis z

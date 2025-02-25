@@ -41,23 +41,23 @@ endif()
 
 
 
-# ********************添加可执行文件
-add_executable(rokae_force src/rokae_force.cpp)
-ament_target_dependencies(rokae_force  "moveit_ros_planning_interface"  rclcpp std_msgs Eigen3)
-# ament_target_dependencies(rokae_force  "moveit_ros_planning_interface" "moveit_visual_tools" rclcpp std_msgs Eigen3)
+# # ********************添加可执行文件
+# add_executable(rokae_force src/rokae_force.cpp)
+# ament_target_dependencies(rokae_force  "moveit_ros_planning_interface"  rclcpp std_msgs Eigen3)
+# # ament_target_dependencies(rokae_force  "moveit_ros_planning_interface" "moveit_visual_tools" rclcpp std_msgs Eigen3)
 
-add_executable(rokae_force_impedance src/rokae_force_impedance.cpp)
-ament_target_dependencies(rokae_force_impedance  "moveit_ros_planning_interface"  rclcpp std_msgs Eigen3)
+# add_executable(rokae_force_impedance src/rokae_force_impedance.cpp)
+# ament_target_dependencies(rokae_force_impedance  "moveit_ros_planning_interface"  rclcpp std_msgs Eigen3)
 
 add_executable(test_impedance_force_node src/test_impedance_force_node.cpp)
 ament_target_dependencies(test_impedance_force_node  "moveit_ros_planning_interface"  rclcpp std_msgs Eigen3)
 
 
-target_link_libraries(rokae_force ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
-target_link_libraries(rokae_force ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
+# target_link_libraries(rokae_force ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
+# target_link_libraries(rokae_force ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
 
-target_link_libraries(rokae_force_impedance ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
-target_link_libraries(rokae_force_impedance ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
+# target_link_libraries(rokae_force_impedance ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
+# target_link_libraries(rokae_force_impedance ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
 
 target_link_libraries(test_impedance_force_node ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
 target_link_libraries(test_impedance_force_node ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
@@ -72,8 +72,8 @@ install(
 )
 
 install(TARGETS
-  rokae_force
-  rokae_force_impedance
+  # rokae_force
+  # rokae_force_impedance
   test_impedance_force_node
   EXPORT export_${PROJECT_NAME}
   LIBRARY DESTINATION lib

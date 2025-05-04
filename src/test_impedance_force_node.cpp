@@ -173,7 +173,8 @@ public:
         double target_speed)
     {
         // 参数校验
-        if(air_dist <= 0 || cruise_dist <= 0 || decel_dist <= 0)
+        const double EPSILON = 1e-10;
+        if(air_dist <= EPSILON || cruise_dist <= EPSILON || decel_dist <= EPSILON)
             throw std::invalid_argument("距离参数必须为正数");
 
         // 使用固定时间步长进行欧拉积分仿真
@@ -246,6 +247,155 @@ public:
         std::cout << "四段轨迹生成完成" << std::endl;
 
         return trajectory;
+    }
+
+
+    /**
+     * @brief 四阶段Y轴运动轨迹生成（空中加速+匀速运动+减速缓冲+最终停止）
+     * @param start 起始点
+     * @param air_dist Y轴加速段长度
+     * @param cruise_dist Y轴匀速段长度 
+     * @param decel_dist Y轴减速缓冲段长度
+     * @param target_speed Y轴目标速度
+     * @param direction Y轴方向（1表示正方向，-1表示负方向）
+     */
+    static std::vector<std::array<double, 6>> YgenerateFourPhasePath(
+        const std::array<double, 6>& start,
+        double air_dist,
+        double cruise_dist,
+        double decel_dist,
+        double target_speed,
+        int direction = 1)
+    {
+        // 参数校验
+        const double EPSILON = 1e-10;
+        if(air_dist <= EPSILON|| cruise_dist <= EPSILON || decel_dist <= EPSILON)
+            throw std::invalid_argument("距离参数必须为正数");
+
+        // 确保方向参数为1或-1
+        if(direction != 1 && direction != -1)
+            direction = direction >= 0 ? 1 : -1;
+
+        // 使用固定时间步长进行欧拉积分仿真
+        double dt = 0.001;
+        std::vector<std::array<double, 6>> trajectory;
+        
+        // 初始状态：位置、速度均为0
+        double pos = 0.0;      // 从起始点到当前的累计位移
+        double v = 0.0;        // 当前速度
+        auto point = start;
+        trajectory.push_back(point);
+        
+        //
+        // 阶段1：空中加速（从0加速到 target_speed）
+        //
+        double a1 = target_speed * target_speed / (2 * air_dist);
+        double t1 = target_speed / a1;
+        for(double t = 0; t < t1; t += dt) {
+            v += a1 * dt;       // 累计加速
+            pos += v * dt;      // 更新位移
+            point = start;
+            // 注意：这里应用Y轴位移，根据direction决定方向
+            point[1] = start[1] + direction * pos;
+            trajectory.push_back(point);
+        }
+        
+        //
+        // 阶段2：匀速运动（以 target_speed 匀速前进 cruise_dist）
+        //
+        v = target_speed; // 保持匀速
+        double cruise_time = cruise_dist / target_speed;
+        for(double t = 0; t < cruise_time; t += dt) {
+            pos += v * dt;
+            point = start;
+            point[1] = start[1] + direction * pos;
+            trajectory.push_back(point);
+        }
+        
+        //
+        // 阶段3：减速缓冲（从 target_speed 减速到0）
+        //
+        double a3 = target_speed * target_speed / (2 * decel_dist);
+        double decel_pos = 0.0;  // 本阶段累计位移
+        v = target_speed;
+        while(decel_pos < decel_dist && v > 1e-6) {
+            v -= a3 * dt;
+            if(v < 0) {
+                v = 0;
+            }
+            double dp = v * dt;
+            decel_pos += dp;
+            pos += dp;
+            point = start;
+            point[1] = start[1] + direction * pos;
+            trajectory.push_back(point);
+        }
+        
+        // 最终位置补偿：确保最终位姿精确
+        double final_y = start[1] + direction * (air_dist + cruise_dist + decel_dist);
+        if (std::abs(trajectory.back()[1] - final_y) > 1e-3) {
+            point = trajectory.back();
+            point[1] = final_y;
+            trajectory.push_back(point);
+        }
+        
+        std::cout << "Y轴四段轨迹生成完成，方向:" << (direction > 0 ? "正向" : "负向") << std::endl;
+
+        return trajectory;
+    }
+
+    /**
+     * @brief 生成Z-Y复合轨迹（先向下再水平运动）
+     * @param start 起始点
+     * @param z_air_dist Z轴加速段距离
+     * @param z_cruise_dist Z轴匀速段距离
+     * @param z_decel_dist Z轴减速段距离
+     * @param z_target_speed Z轴目标速度
+     * @param y_air_dist Y轴加速段距离
+     * @param y_cruise_dist Y轴匀速段距离
+     * @param y_decel_dist Y轴减速段距离
+     * @param y_target_speed Y轴目标速度
+     * @param y_direction Y轴方向（1表示正方向，-1表示负方向）
+     */
+    static std::vector<std::array<double, 6>> generateZYCompositePath(
+        const std::array<double, 6>& start,
+        double z_air_dist, double z_cruise_dist, double z_decel_dist, double z_target_speed,
+        double y_air_dist, double y_cruise_dist, double y_decel_dist, double y_target_speed,
+        int y_direction = 1)
+    {
+        // 首先生成Z轴向下轨迹
+        auto z_trajectory = generateFourPhasePath(
+            start, z_air_dist, z_cruise_dist, z_decel_dist, z_target_speed
+        );
+        
+        if(z_trajectory.empty()) {
+            throw std::runtime_error("Z轴轨迹生成失败");
+        }
+        
+        // 使用Z轴轨迹的最终点作为Y轴轨迹的起点
+        auto y_start = z_trajectory.back();
+        
+        // 生成Y轴水平轨迹
+        auto y_trajectory = YgenerateFourPhasePath(
+            y_start, y_air_dist, y_cruise_dist, y_decel_dist, y_target_speed, y_direction
+        );
+        
+        if(y_trajectory.empty()) {
+            throw std::runtime_error("Y轴轨迹生成失败");
+        }
+        
+        // 合并两段轨迹
+        std::vector<std::array<double, 6>> combined_trajectory = z_trajectory;
+        // 跳过y_trajectory的第一个点（与z_trajectory的最后一个点重复）
+        combined_trajectory.insert(combined_trajectory.end(), 
+                                y_trajectory.begin() + 1, 
+                                y_trajectory.end());
+        
+        std::cout << "ZY复合轨迹生成完成，总点数: " << combined_trajectory.size() 
+                << " (Z段: " << z_trajectory.size() 
+                << ", Y段: " << y_trajectory.size() - 1 << ")" << std::endl;
+        
+        return combined_trajectory;
     }
 
 private:
@@ -343,9 +493,21 @@ public:
         this->declare_parameter("cruise_distance", 0.05,
             floatDesc("匀速侵入段距离（米）", 0.01, 1.0, 0.01));    //匀速侵入段距离
         this->declare_parameter("decel_distance", 0.02,
-            floatDesc("减速缓冲段距离（米）", 0.01, 1.0, 0.01));     //减速缓冲段距离
+            floatDesc("减速缓冲段距离（米）", 0.00, 1.0, 0.01));     //减速缓冲段距离
         this->declare_parameter("target_speed", 0.05,
             floatDesc("期望侵入速度（米/秒）", 0.01, 2.5, 0.01));   //期望侵入速度
+
+        // 添加Y轴参数
+        this->declare_parameter("y_air_distance", 0.04, 
+            floatDesc("Y轴加速段距离（米）", 0.01, 1.0, 0.01));     //Y轴加速段距离
+        this->declare_parameter("y_cruise_distance", 0.05,
+            floatDesc("Y轴匀速段距离（米）", 0.01, 1.0, 0.01));     //Y轴匀速段距离
+        this->declare_parameter("y_decel_distance", 0.01,
+            floatDesc("Y轴减速段距离（米）", 0.00, 1.0, 0.01));     //Y轴减速段距离
+        this->declare_parameter("y_target_speed", 0.01,
+            floatDesc("Y轴期望速度（米/秒）", 0.01, 2.5, 0.01));    //Y轴期望速度
+        this->declare_parameter("y_direction", 1,
+            floatDesc("Y轴方向(1=正向,-1=负向)", -1, 1, 2));       //Y轴方向
 
         // 订阅键盘输入
         keyborad = this->create_subscription<std_msgs::msg::String>("/keystroke", 10, std::bind(&Rokae_Force::keyborad_callback, this, std::placeholders::_1));
@@ -510,6 +672,13 @@ private:
         double cruise_dist = this->get_parameter("cruise_distance").as_double();
         double decel_dist = this->get_parameter("decel_distance").as_double();
         double target_speed = this->get_parameter("target_speed").as_double();
+
+        double y_air_dist = this->get_parameter("y_air_distance").as_double();
+        double y_cruise_dist = this->get_parameter("y_cruise_distance").as_double();
+        double y_decel_dist = this->get_parameter("y_decel_distance").as_double();
+        double y_target_speed = this->get_parameter("y_target_speed").as_double();
+        int y_direction = this->get_parameter("y_direction").as_int();
+        
         // 收到键盘消息
         RCLCPP_INFO(this->get_logger(), "收到键盘按下的消息---%s", msg->data.c_str());
         key = msg->data.c_str();
@@ -552,7 +721,14 @@ private:
             break;
         case 'v':
             RCLCPP_INFO(this->get_logger(), "启动速度控制");
-            usr_rt_cartesian_v_control(air_dist, cruise_dist, decel_dist, target_speed);
+            usr_rt_cartesian_v_control_z(air_dist, cruise_dist, decel_dist, target_speed);
+            break;
+        case 'b':  // 新增键位支持复合轨迹控制
+            RCLCPP_INFO(this->get_logger(), "启动速度控制（Z-Y复合轨迹控制）");
+            usr_rt_cartesian_v_control(
+                air_dist, cruise_dist, decel_dist, target_speed,
+                y_air_dist, y_cruise_dist, y_decel_dist, y_target_speed, y_direction  // 默认Y轴参数
+            );
             break;
         default:
             RCLCPP_INFO(this->get_logger(), "你在狗叫什么");
@@ -705,13 +881,15 @@ private:
     {
         try {
             // 获取当前位置
-            std::array<double, 6UL> init_position = robot->posture(rokae::CoordinateType::flangeInBase, ec);
-            print(std::cout, "Current position:", init_position);
+            std::array<double, 6UL> start = robot->posture(rokae::CoordinateType::flangeInBase, ec);
+            print(std::cout, "Current position:", start);
 
-            // 定义测试路径点。x/y/z/roll/pitch/yaw
-            std::array<double, 6> start = {0.4, 0.0, 0.5, M_PI, 0.0, M_PI};         // 起始点
-            std::array<double, 6> via_point = {0.4, 0.0, 0.3, M_PI, 0.0, M_PI};     // 中间点
-            std::array<double, 6> end = {0.4, 0.1, 0.4, M_PI, 0.0, M_PI};           // 终点
+            // 定义三个路径点，实现先下压后平移的轨迹
+            std::array<double, 6> via_point = start; // 中间点(下压xxxm)
+            via_point[2] -= 0.190;
+
+            std::array<double, 6> end = via_point;      // 终点(平移xxxm)
+            end[1] += 0.1;
 
             auto trajectory = TrajectoryGenerator::generateLinearSegmentPath(start, via_point, end, first_time, second_time);
 
@@ -730,7 +908,7 @@ private:
             // 设置笛卡尔阻抗参数。！最大值为 { 1500, 1500, 1500, 100, 100, 100 }, 单位: N/m, Nm/rad。
             // XYZ方向：设置较低刚度以实现柔顺性
             // 姿态方向：保持较高刚度以保持姿态
-            rtCon->setCartesianImpedance({500, 500, 200, 100, 100, 100}, ec);
+            rtCon->setCartesianImpedance({1500, 1500, 1500, 100, 100, 100}, ec);
             
             // 设置期望力
             rtCon->setCartesianImpedanceDesiredTorque({0, 0, desired_force_z, 0, 0, 0}, ec);
@@ -878,7 +1056,7 @@ private:
 
             // 定义三个路径点，实现先下压后平移的轨迹
             std::array<double, 6> via_point = start; // 中间点(下压xxxm)
-            via_point[2] -= 0.190;
+            via_point[2] -= 0.180;
 
             std::array<double, 6> end = via_point;      // 终点(平移xxxm)
             end[1] += 0.1;
@@ -957,12 +1135,16 @@ private:
      * @param target_speed 期望侵入速度
      * @
      */
-    void usr_rt_cartesian_v_control(double air_dist, double cruise_dist, double decel_dist, double target_speed)
+    void usr_rt_cartesian_v_control(
+        double z_air_dist, double z_cruise_dist, double z_decel_dist, double z_target_speed,
+        double y_air_dist = 0.0, double y_cruise_dist = 0.0, double y_decel_dist = 0.0, 
+        double y_target_speed = 0.0, int y_direction = 1)
     {
         try {
             // 参数校验，传入的距离和速度必须大于等于0
-            if(air_dist <= 0 || cruise_dist <= 0 || decel_dist <= 0 || target_speed <= 0) {
-                RCLCPP_ERROR(this->get_logger(), "无效的传入参数，立即检查速度控制的传入参数!");
+            const double EPSILON = 1e-10;
+            if(z_air_dist <= EPSILON || z_cruise_dist <= EPSILON || z_decel_dist <= EPSILON || z_target_speed <= EPSILON) {
+                RCLCPP_ERROR(this->get_logger(), "无效的z轴传入参数，立即检查速度控制的传入参数!");
                 return;
             }
 
@@ -976,15 +1158,29 @@ private:
             // 获取当前位置
             std::array<double, 6UL> start = robot->posture(rokae::CoordinateType::flangeInBase, ec);
             print(std::cout, "当前初始位置：", start);
-
-            auto trajectory = TrajectoryGenerator::generateFourPhasePath(
-                start, 
-                air_dist,
-                cruise_dist,
-                decel_dist,
-                target_speed
-            );
             
+            std::vector<std::array<double, 6>> trajectory;
+
+            // 判断是否为复合轨迹
+            bool is_composite = (y_air_dist > EPSILON && y_cruise_dist > EPSILON && 
+                                y_decel_dist > EPSILON && y_target_speed > EPSILON);
+
+            if(is_composite) {
+                // 生成复合轨迹
+                trajectory = TrajectoryGenerator::generateZYCompositePath(
+                    start, 
+                    z_air_dist, z_cruise_dist, z_decel_dist, z_target_speed,
+                    y_air_dist, y_cruise_dist, y_decel_dist, y_target_speed, y_direction
+            );
+            RCLCPP_INFO(this->get_logger(), "已生成Z-Y复合轨迹，共%d个点", (int)trajectory.size());
+            } else {
+                // 仅生成Z轴轨迹
+                trajectory = TrajectoryGenerator::generateFourPhasePath(
+                    start, z_air_dist, z_cruise_dist, z_decel_dist, z_target_speed
+            );
+            RCLCPP_INFO(this->get_logger(), "已生成Z轴轨迹，共%d个点", (int)trajectory.size());
+            }
+
             // 启动笛卡尔空间位置控制模式
             rtCon->startMove(RtControllerMode::cartesianPosition);
             
@@ -1047,8 +1243,15 @@ private:
         } catch (const std::exception &e) {
             pose_timer_->reset();
             robot->stopReceiveRobotState(); // 确保停止接收数据
+            rtCon->stopLoop();
+            rtCon->stopMove();
             RCLCPP_ERROR(this->get_logger(), "实时轨迹控制错误: %s", e.what());
         }
+    }
+
+    void usr_rt_cartesian_v_control_z(double air_dist, double cruise_dist, double decel_dist, double target_speed)
+    {
+        usr_rt_cartesian_v_control(air_dist, cruise_dist, decel_dist, target_speed, 0.0, 0.0, 0.0, 0.0, 1);
     }
 
     // 添加订阅者成员变量

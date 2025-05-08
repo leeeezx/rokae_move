@@ -158,6 +158,114 @@ public:
 
 
     /**
+     * @brief 四阶段对角线轨迹生成(Z-Y平面特定角度，加速+匀速+减速+停止)
+     * @param start 起始点
+     * @param air_dist 加速段距离
+     * @param cruise_dist 匀速段距离
+     * @param decel_dist 减速段距离
+     * @param target_speed 目标速度
+     * @param gamma_deg 角度gamma(度)，Y轴负方向为0度，Z轴负方向为90度
+     */
+    static std::vector<std::array<double, 6>> generateDiagonalPhasePath(
+        const std::array<double, 6>& start,
+        double air_dist,
+        double cruise_dist,
+        double decel_dist,
+        double target_speed,
+        double gamma_deg)
+    {
+        // 参数校验
+        const double EPSILON = 1e-10;
+        if(air_dist <= EPSILON || cruise_dist <= EPSILON || decel_dist <= EPSILON || target_speed <= EPSILON)
+            throw std::invalid_argument("距离和速度参数必须为正数");
+        if(gamma_deg < 0 || gamma_deg > 90)
+            throw std::invalid_argument("角度gamma必须在0-90度之间");
+
+        // 将角度转换为弧度
+        double gamma_rad = gamma_deg * M_PI / 180.0;
+        
+        // 使用固定时间步长进行欧拉积分仿真
+        double dt = 0.001;
+        std::vector<std::array<double, 6>> trajectory;
+        
+        // 计算y和z方向的分量
+        double cos_gamma = std::cos(gamma_rad);  // Y轴分量比例
+        double sin_gamma = std::sin(gamma_rad);  // Z轴分量比例
+        
+        // 初始状态：位置、速度均为0
+        double pos = 0.0;      // 从起始点到当前的累计位移(沿对角线方向)
+        double v = 0.0;        // 当前速度
+        auto point = start;
+        trajectory.push_back(point);
+        
+        // 阶段1：加速（从0加速到 target_speed）
+        double a1 = target_speed * target_speed / (2 * air_dist);
+        double t1 = target_speed / a1;
+        for(double t = 0; t < t1; t += dt) {
+            v += a1 * dt;       // 累计加速
+            pos += v * dt;      // 更新位移
+            point = start;
+            
+            // 注意：这里Y轴负方向移动，Z轴负方向移动，所以都减去位移
+            point[1] = start[1] - pos * cos_gamma;
+            point[2] = start[2] - pos * sin_gamma;
+            trajectory.push_back(point);
+        }
+        
+        // 阶段2：匀速运动（以 target_speed 匀速前进 cruise_dist）
+        v = target_speed; // 保持匀速
+        double cruise_time = cruise_dist / target_speed;
+        double cruise_start_pos = pos; // 记录匀速阶段起始累计位移
+        
+        for(double t = 0; t < cruise_time; t += dt) {
+            pos += v * dt;
+            point = start;
+            
+            point[1] = start[1] - pos * cos_gamma;
+            point[2] = start[2] - pos * sin_gamma;
+            trajectory.push_back(point);
+        }
+        
+        // 阶段3：减速缓冲（从 target_speed 减速到0）
+        double a3 = target_speed * target_speed / (2 * decel_dist);
+        double decel_pos = 0.0;  // 本阶段累计位移
+        double decel_start_pos = pos; // 记录减速阶段起始累计位移
+        v = target_speed;
+        
+        while(decel_pos < decel_dist && v > 1e-6) {
+            v -= a3 * dt;
+            if(v < 0) {
+                v = 0;
+            }
+            double dp = v * dt;
+            decel_pos += dp;
+            pos += dp;
+            point = start;
+            
+            point[1] = start[1] - pos * cos_gamma;
+            point[2] = start[2] - pos * sin_gamma;
+            trajectory.push_back(point);
+        }
+        
+        // 最终位置补偿：确保最终位姿精确
+        double total_dist = air_dist + cruise_dist + decel_dist;
+        double final_y = start[1] - total_dist * cos_gamma;
+        double final_z = start[2] - total_dist * sin_gamma;
+        
+        if (std::abs(trajectory.back()[1] - final_y) > 1e-3 || 
+            std::abs(trajectory.back()[2] - final_z) > 1e-3) {
+            point = trajectory.back();
+            point[1] = final_y;
+            point[2] = final_z;
+            trajectory.push_back(point);
+        }
+        
+        std::cout << "对角轨迹生成完成，角度: " << gamma_deg << "度" << std::endl;
+        return trajectory;
+    }
+
+
+    /**
      * @brief 四阶段侵入轨迹生成（空中加速+匀速侵入+减速缓冲+最终停止）
      * @param start 起始点
      * @param air_dist 空中加速段长度（到沙土表面的距离）
@@ -398,6 +506,66 @@ public:
         return combined_trajectory;
     }
 
+
+    /**
+     * @brief 生成垂直下压 + 特定角度的复合轨迹
+     * @param start 起始点 
+     * @param vertical_air_dist 垂直下压加速段长度
+     * @param vertical_cruise_dist 垂直下压匀速段长度
+     * @param vertical_decel_dist 垂直下压减速段长度
+     * @param vertical_target_speed 垂直下压目标速度
+     * @param diagonal_air_dist 对角线加速段长度
+     * @param diagonal_cruise_dist 对角线匀速段长度
+     * @param diagonal_decel_dist 对角线减速段长度
+     * @param diagonal_target_speed 对角线目标速度
+     * @param gamma_deg Z-Y平面角度(度)
+     */
+    static std::vector<std::array<double, 6>> generateVerticalDiagonalPath(
+        const std::array<double, 6>& start,
+        double vertical_air_dist, double vertical_cruise_dist, double vertical_decel_dist, 
+        double vertical_target_speed,
+        double diagonal_air_dist, double diagonal_cruise_dist, double diagonal_decel_dist, 
+        double diagonal_target_speed,
+        double gamma_deg)
+    {
+        // 首先生成垂直下压轨迹
+        auto vertical_trajectory = generateFourPhasePath(
+            start, vertical_air_dist, vertical_cruise_dist, vertical_decel_dist, vertical_target_speed
+        );
+        
+        if(vertical_trajectory.empty()) {
+            throw std::runtime_error("垂直轨迹生成失败");
+        }
+        
+        // 以垂直轨迹的末端点作为对角线轨迹的起点
+        auto diagonal_start = vertical_trajectory.back();
+        
+        // 生成对角线轨迹
+        auto diagonal_trajectory = generateDiagonalPhasePath(
+            diagonal_start, diagonal_air_dist, diagonal_cruise_dist, diagonal_decel_dist, 
+            diagonal_target_speed, gamma_deg
+        );
+        
+        if(diagonal_trajectory.empty()) {
+            throw std::runtime_error("对角线轨迹生成失败");
+        }
+        
+        // 合并两段轨迹
+        std::vector<std::array<double, 6>> combined_trajectory = vertical_trajectory;
+        // 跳过diagonal_trajectory的第一个点（与vertical_trajectory的最后一个点重复）
+        combined_trajectory.insert(combined_trajectory.end(), 
+                                diagonal_trajectory.begin() + 1, 
+                                diagonal_trajectory.end());
+        
+        std::cout << "垂直+对角复合轨迹生成完成，总点数: " << combined_trajectory.size() 
+                << " (垂直段: " << vertical_trajectory.size() 
+                << ", 对角段: " << diagonal_trajectory.size() - 1 
+                << "), 角度: " << gamma_deg << "度" << std::endl;
+        
+        return combined_trajectory;
+    }
+
+
 private:
 
     static double smoothTrajectory(double t, double total_duration)
@@ -508,6 +676,18 @@ public:
             floatDesc("Y轴期望速度（米/秒）", 0.01, 2.5, 0.01));    //Y轴期望速度
         this->declare_parameter("y_direction", 1,
             floatDesc("Y轴方向(1=正向,-1=负向)", -1, 1, 2));       //Y轴方向
+
+        // 添加对角线参数
+        this->declare_parameter("diagonal_air_distance", 0.04, 
+            floatDesc("对角线加速段距离（米）", 0.0, 1.0, 0.01));
+        this->declare_parameter("diagonal_cruise_distance", 0.05,
+            floatDesc("对角线匀速段距离（米）", 0.0, 1.0, 0.01));
+        this->declare_parameter("diagonal_decel_distance", 0.01,
+            floatDesc("对角线减速段距离（米）", 0.0, 1.0, 0.01));
+        this->declare_parameter("diagonal_target_speed", 0.03,
+            floatDesc("对角线期望速度（米/秒）", 0.01, 2.5, 0.01));
+        this->declare_parameter("gamma_angle", 45.0,
+            floatDesc("对角线Z-Y平面角度（度，0=Y轴负方向，90=Z轴负方向）", 0.0, 90.0, 1.0));
 
         // 订阅键盘输入
         keyborad = this->create_subscription<std_msgs::msg::String>("/keystroke", 10, std::bind(&Rokae_Force::keyborad_callback, this, std::placeholders::_1));
@@ -678,6 +858,12 @@ private:
         double y_decel_dist = this->get_parameter("y_decel_distance").as_double();
         double y_target_speed = this->get_parameter("y_target_speed").as_double();
         int y_direction = this->get_parameter("y_direction").as_int();
+
+        double diagonal_air_dist = this->get_parameter("diagonal_air_distance").as_double();
+        double diagonal_cruise_dist = this->get_parameter("diagonal_cruise_distance").as_double();
+        double diagonal_decel_dist = this->get_parameter("diagonal_decel_distance").as_double();
+        double diagonal_target_speed = this->get_parameter("diagonal_target_speed").as_double();
+        double gamma_angle = this->get_parameter("gamma_angle").as_double();
         
         // 收到键盘消息
         RCLCPP_INFO(this->get_logger(), "收到键盘按下的消息---%s", msg->data.c_str());
@@ -728,6 +914,14 @@ private:
             usr_rt_cartesian_v_control(
                 air_dist, cruise_dist, decel_dist, target_speed,
                 y_air_dist, y_cruise_dist, y_decel_dist, y_target_speed, y_direction  // 默认Y轴参数
+            );
+            break;
+        case 'n': // 新增键位支持垂直+对角轨迹控制
+            RCLCPP_INFO(this->get_logger(), "启动垂直下压+对角线运动控制（角度:%.1f度）", gamma_angle);
+            usr_rt_vertical_diagonal_control(
+                air_dist, cruise_dist, decel_dist, target_speed,  // 垂直段参数
+                diagonal_air_dist, diagonal_cruise_dist, diagonal_decel_dist, diagonal_target_speed,  // 对角线段参数
+                gamma_angle  // 对角线角度
             );
             break;
         default:
@@ -1252,6 +1446,130 @@ private:
     void usr_rt_cartesian_v_control_z(double air_dist, double cruise_dist, double decel_dist, double target_speed)
     {
         usr_rt_cartesian_v_control(air_dist, cruise_dist, decel_dist, target_speed, 0.0, 0.0, 0.0, 0.0, 1);
+    }
+
+    /**
+     * @brief 实时模式：垂直下压 + 特定角度轨迹运动控制
+     * @param vertical_air_dist 垂直下压加速段距离
+     * @param vertical_cruise_dist 垂直下压匀速段距离
+     * @param vertical_decel_dist 垂直下压减速段距离
+     * @param vertical_target_speed 垂直下压目标速度
+     * @param diagonal_air_dist 对角线加速段距离
+     * @param diagonal_cruise_dist 对角线匀速段距离
+     * @param diagonal_decel_dist 对角线减速段距离
+     * @param diagonal_target_speed 对角线目标速度
+     * @param gamma_deg Z-Y平面角度(度)
+     */
+    void usr_rt_vertical_diagonal_control(
+        double vertical_air_dist, double vertical_cruise_dist, double vertical_decel_dist, double vertical_target_speed,
+        double diagonal_air_dist, double diagonal_cruise_dist, double diagonal_decel_dist, double diagonal_target_speed,
+        double gamma_deg)
+    {
+        try {
+            // 参数校验
+            const double EPSILON = 1e-10;
+            if(vertical_air_dist <= EPSILON || vertical_cruise_dist <= EPSILON || 
+            vertical_decel_dist <= EPSILON || vertical_target_speed <= EPSILON) {
+                RCLCPP_ERROR(this->get_logger(), "无效的垂直段参数!");
+                return;
+            }
+            if(diagonal_air_dist <= EPSILON || diagonal_cruise_dist <= EPSILON || 
+            diagonal_decel_dist <= EPSILON || diagonal_target_speed <= EPSILON) {
+                RCLCPP_ERROR(this->get_logger(), "无效的对角线段参数!");
+                return;
+            }
+            if(gamma_deg < 0 || gamma_deg > 90) {
+                RCLCPP_ERROR(this->get_logger(), "角度gamma必须在0-90度之间!");
+                return;
+            }
+
+            // 停止初始位姿发布
+            pose_timer_->cancel();
+
+            // 设置需要接收的机器人状态数据
+            std::vector<std::string> fields = {RtSupportedFields::tcpPoseAbc_m}; // 接收末端位姿数据
+            robot->startReceiveRobotState(std::chrono::milliseconds(1), fields); // 1ms采样周期
+            
+            // 获取当前位置
+            std::array<double, 6UL> start = robot->posture(rokae::CoordinateType::flangeInBase, ec);
+            print(std::cout, "当前初始位置：", start);
+            
+            std::vector<std::array<double, 6>> trajectory;
+            
+            try {
+                // 生成垂直+对角复合轨迹
+                trajectory = TrajectoryGenerator::generateVerticalDiagonalPath(
+                    start, 
+                    vertical_air_dist, vertical_cruise_dist, vertical_decel_dist, vertical_target_speed,
+                    diagonal_air_dist, diagonal_cruise_dist, diagonal_decel_dist, diagonal_target_speed,
+                    gamma_deg
+                );
+                RCLCPP_INFO(this->get_logger(), "已生成垂直+对角轨迹，共%d个点, 角度: %.1f度", 
+                            (int)trajectory.size(), gamma_deg);
+            } catch (const std::exception& e) {
+                RCLCPP_ERROR(this->get_logger(), "轨迹生成失败: %s", e.what());
+                robot->stopReceiveRobotState();
+                pose_timer_->reset();
+                return;
+            }
+
+            // 启动笛卡尔空间位置控制模式
+            rtCon->startMove(RtControllerMode::cartesianPosition);
+            
+            std::atomic<bool> stopManually{true};
+            int index = 0;
+
+            // 控制循环回调函数
+            std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
+                CartesianPosition output{};
+
+                if (index < int(trajectory.size())) {
+                    // 获取目标轨迹点
+                    auto target_pose = trajectory[index];
+                    Utils::postureToTransArray(target_pose, output.pos);
+                    
+                    // 获取实时位姿并发布
+                    std::array<double, 6> current_pose;
+                    if(robot->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0) {
+                        // 更新最新位姿数据
+                        std::lock_guard<std::mutex> lock(pose_data_mutex_);
+                        latest_current_pose_ = current_pose;
+                        latest_target_pose_ = target_pose;
+
+                        publish_realtime_pose(latest_current_pose_, latest_target_pose_);
+                    }
+
+                    index++;
+                } else {
+                    output.setFinished();
+                    stopManually.store(false);
+                }
+                
+                return output;
+            };
+
+            rtCon->setControlLoop(callback, 0, true);
+            rtCon->startLoop(false);
+
+            // 控制循环
+            while(stopManually.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            
+            // 停止接收机器人状态数据
+            rtCon->stopLoop();
+            rtCon->stopMove();
+            robot->stopReceiveRobotState();
+            pose_timer_->reset();
+            RCLCPP_INFO(this->get_logger(), "垂直+对角轨迹控制完成");
+
+        } catch (const std::exception &e) {
+            pose_timer_->reset();
+            robot->stopReceiveRobotState(); // 确保停止接收数据
+            rtCon->stopLoop();
+            rtCon->stopMove();
+            RCLCPP_ERROR(this->get_logger(), "垂直+对角轨迹控制错误: %s", e.what());
+        }
     }
 
     // 添加订阅者成员变量

@@ -686,8 +686,8 @@ public:
             floatDesc("对角线减速段距离（米）", 0.0, 1.0, 0.01));
         this->declare_parameter("diagonal_target_speed", 0.03,
             floatDesc("对角线期望速度（米/秒）", 0.01, 2.5, 0.01));
-        this->declare_parameter("gamma_angle", 45.0,
-            floatDesc("对角线Z-Y平面角度（度，0=Y轴负方向，90=Z轴负方向）", 0.0, 90.0, 1.0));
+        this->declare_parameter("gamma_angle", 45.00,
+            floatDesc("对角线Z-Y平面角度（度，0=Y轴负方向，90=Z轴负方向）", 0.00, 90.00, 0.01));
 
         // 订阅键盘输入
         keyborad = this->create_subscription<std_msgs::msg::String>("/keystroke", 10, std::bind(&Rokae_Force::keyborad_callback, this, std::placeholders::_1));
@@ -1054,9 +1054,9 @@ private:
             std::array<double, 6UL> init_point = {0.45, 0.0, 0.5, 3.14154, 0.0, 3.14154};
             Utils::postureToTransArray(init_point, target.pos);
 
-            RCLCPP_INFO(this->get_logger(), "---Back to initial pose !---.");
+            RCLCPP_INFO(this->get_logger(), "\n---Back to initial pose !---.");
             rtCon->MoveL(0.05, start, target);
-            RCLCPP_INFO(this->get_logger(), "---Reset robot finish---.");
+            RCLCPP_INFO(this->get_logger(), "---Reset robot finish---\n\n.");
         }
         catch (const std::exception &e)
         {
@@ -1561,7 +1561,7 @@ private:
             rtCon->stopMove();
             robot->stopReceiveRobotState();
             pose_timer_->reset();
-            RCLCPP_INFO(this->get_logger(), "垂直+对角轨迹控制完成");
+            RCLCPP_INFO(this->get_logger(), "垂直+对角轨迹控制完成\n-------------------------------");
 
         } catch (const std::exception &e) {
             pose_timer_->reset();

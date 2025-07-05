@@ -657,34 +657,34 @@ public:
         this->declare_parameter("second_time", 10.0);
 
         this->declare_parameter("air_distance", 0.12, 
-            floatDesc("空中加速段距离（米）", 0.01, 1.0, 0.01));       //空中加速段距离
+            floatDesc("空中加速段距离（米）", 0.01, 1.0, 0.001));       //空中加速段距离
         this->declare_parameter("cruise_distance", 0.05,
-            floatDesc("匀速侵入段距离（米）", 0.01, 1.0, 0.01));    //匀速侵入段距离
+            floatDesc("匀速侵入段距离（米）", 0.01, 1.0, 0.001));    //匀速侵入段距离
         this->declare_parameter("decel_distance", 0.02,
-            floatDesc("减速缓冲段距离（米）", 0.00, 1.0, 0.01));     //减速缓冲段距离
-        this->declare_parameter("target_speed", 0.05,
+            floatDesc("减速缓冲段距离（米）", 0.00, 1.0, 0.001));     //减速缓冲段距离
+        this->declare_parameter("target_speed", 0.01,
             floatDesc("期望侵入速度（米/秒）", 0.01, 2.5, 0.01));   //期望侵入速度
 
         // 添加Y轴参数
         this->declare_parameter("y_air_distance", 0.04, 
-            floatDesc("Y轴加速段距离（米）", 0.01, 1.0, 0.01));     //Y轴加速段距离
+            floatDesc("Y轴加速段距离（米）", 0.01, 1.0, 0.001));     //Y轴加速段距离
         this->declare_parameter("y_cruise_distance", 0.05,
-            floatDesc("Y轴匀速段距离（米）", 0.01, 1.0, 0.01));     //Y轴匀速段距离
+            floatDesc("Y轴匀速段距离（米）", 0.01, 1.0, 0.001));     //Y轴匀速段距离
         this->declare_parameter("y_decel_distance", 0.01,
-            floatDesc("Y轴减速段距离（米）", 0.00, 1.0, 0.01));     //Y轴减速段距离
+            floatDesc("Y轴减速段距离（米）", 0.00, 1.0, 0.001));     //Y轴减速段距离
         this->declare_parameter("y_target_speed", 0.01,
             floatDesc("Y轴期望速度（米/秒）", 0.01, 2.5, 0.01));    //Y轴期望速度
         this->declare_parameter("y_direction", 1,
             floatDesc("Y轴方向(1=正向,-1=负向)", -1, 1, 2));       //Y轴方向
 
         // 添加对角线参数
-        this->declare_parameter("diagonal_air_distance", 0.04, 
-            floatDesc("对角线加速段距离（米）", 0.0, 1.0, 0.01));
-        this->declare_parameter("diagonal_cruise_distance", 0.05,
-            floatDesc("对角线匀速段距离（米）", 0.0, 1.0, 0.01));
+        this->declare_parameter("diagonal_air_distance", 0.01, 
+            floatDesc("对角线加速段距离（米）", 0.0, 1.0, 0.001));
+        this->declare_parameter("diagonal_cruise_distance", 0.01,
+            floatDesc("对角线匀速段距离（米）", 0.0, 1.0, 0.001));
         this->declare_parameter("diagonal_decel_distance", 0.01,
-            floatDesc("对角线减速段距离（米）", 0.0, 1.0, 0.01));
-        this->declare_parameter("diagonal_target_speed", 0.03,
+            floatDesc("对角线减速段距离（米）", 0.0, 1.0, 0.001));
+        this->declare_parameter("diagonal_target_speed", 0.01,
             floatDesc("对角线期望速度（米/秒）", 0.01, 2.5, 0.01));
         this->declare_parameter("gamma_angle", 45.00,
             floatDesc("对角线Z-Y平面角度（度，0=Y轴负方向，90=Z轴负方向）", 0.00, 90.00, 0.01));
@@ -1386,21 +1386,21 @@ private:
             std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
                 CartesianPosition output{};
 
-                RCLCPP_INFO(this->get_logger(), "进入回调函数1");
+                // RCLCPP_INFO(this->get_logger(), "进入回调函数1");
 
                 if (index < int(trajectory.size())) {
                     // 获取目标轨迹点。这里的target_pose是当前的理论轨迹规划点
                     auto target_pose = trajectory[index];
                     Utils::postureToTransArray(target_pose, output.pos);
-                    RCLCPP_INFO(this->get_logger(), "轨迹控制2");
+                    // RCLCPP_INFO(this->get_logger(), "轨迹控制2");
                     
                     // 获取实时位姿
                     // robot->updateRobotState(std::chrono::milliseconds(1));
                     std::array<double, 6> current_pose;
                     if(robot->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0) {
-                        RCLCPP_INFO(this->get_logger(), "更新位姿信息3: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
-                                    current_pose[0], current_pose[1], current_pose[2],
-                                    current_pose[3], current_pose[4], current_pose[5]);
+                        // RCLCPP_INFO(this->get_logger(), "更新位姿信息3: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
+                        //             current_pose[0], current_pose[1], current_pose[2],
+                        //             current_pose[3], current_pose[4], current_pose[5]);
                         // 更新最新位姿数据
                         std::lock_guard<std::mutex> lock(pose_data_mutex_);
                         latest_current_pose_ = current_pose;

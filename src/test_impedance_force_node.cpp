@@ -771,6 +771,8 @@ private:
 
     std::string velocity_command;
 
+    std::atomic<int> publish_counter{0};
+
     // 力控结构体，包括力控制参数和函数
     struct ForceController {
         double desired_force_z = -5.0; // 机械臂末端期望的z方向力
@@ -1528,15 +1530,14 @@ private:
                     auto target_pose = trajectory[index];
                     Utils::postureToTransArray(target_pose, output.pos);
                     
-                    // 获取实时位姿并发布
-                    std::array<double, 6> current_pose;
-                    if(robot->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0) {
-                        // 更新最新位姿数据
-                        std::lock_guard<std::mutex> lock(pose_data_mutex_);
-                        latest_current_pose_ = current_pose;
-                        latest_target_pose_ = target_pose;
-
-                        publish_realtime_pose(latest_current_pose_, latest_target_pose_);
+                    if (publish_counter++ % 2 == 0) {
+                        std::array<double, 6> current_pose;
+                        if(robot->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0) {
+                            std::lock_guard<std::mutex> lock(pose_data_mutex_);
+                            latest_current_pose_ = current_pose;
+                            latest_target_pose_ = target_pose;
+                            publish_realtime_pose(latest_current_pose_, latest_target_pose_);
+                        }
                     }
 
                     index++;

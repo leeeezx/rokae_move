@@ -29,21 +29,31 @@
 #include <filesystem> 
 
 
-// 创建Rokae_Force类。直接继承rclcpp::Node，使roake_force成为ros2的节点
-class Rokae_Force : public rclcpp::Node
+// 创建Rokae_Move类。直接继承rclcpp::Node，使rokae_move成为ros2的节点
+class Rokae_Move : public rclcpp::Node
 {
 public:
-    Rokae_Force(std::string name); // 构造函数声明
-    ~Rokae_Force();   
+    Rokae_Move(std::string name); // 构造函数声明
+    ~Rokae_Move();   
 
 private:
+    // ---------------------------------初始化------------------------------------
+    void setup_ros_communications(); // 用于设置所有ROS相关的部分
+    void initialize_robot();         // 用于初始化珞石机器人
+
+
     // 所有成员函数声明
     void publish_force_data();
     void timer_callback();
+
+    // 键盘输入回调函数
     std::string keyborad_callback(const std_msgs::msg::String::SharedPtr msg);
+
     void move_enableDrag();
     void move_disableDrag();
+
     std::array<double, 6UL> string_to_array(const std::string &str);
+
     void go2cartesian(const std::array<double, 6UL> &car_vec);
     void move_init();
     void cartesian_impedance_control(double desired_force_z, double first_time, double second_time);
@@ -56,6 +66,7 @@ private:
     void usr_rt_vertical_diagonal_control(double vertical_air_dist, double vertical_cruise_dist, double vertical_decel_dist, double vertical_target_speed,
                                          double diagonal_air_dist, double diagonal_cruise_dist, double diagonal_decel_dist, double diagonal_target_speed,
                                          double gamma_deg);
+
     void force_callback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
     void publish_realtime_pose(const std::array<double, 6>& current_pose, const std::array<double, 6>& target_pose);
     void pubilsh_initial_pose();
@@ -63,12 +74,17 @@ private:
     // 所有成员变量声明
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr command_publisher_;
-    std::shared_ptr<rokae::xMateErProRobot> robot;
-    std::shared_ptr<rokae::RtMotionControlCobot<7U>> rtCon;
-    std::error_code ec;
+
+    std::shared_ptr<rokae::xMateErProRobot> robot; // 机械臂对象
+    std::shared_ptr<rokae::RtMotionControlCobot<7U>> rtCon; // 机械臂实时运动控制对象
+
+    std::error_code ec; // 错误玛ec
+
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr keyborad;
     std::string key;
+    
     std::string cartesian_points_string;
+    
     std::array<double, 6UL> cartesian_points_array;
     
     std::array<double, 7> joint_torque_measured;
@@ -79,6 +95,8 @@ private:
     
     std::string velocity_command;
     std::atomic<int> publish_counter{0};
+
+
 
 
     // 力控结构体

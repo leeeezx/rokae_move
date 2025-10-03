@@ -24,9 +24,33 @@ using namespace std;
 
 
 /** 
- * @brief 构造函数，初始化roake_force节点。有一个参数为节点名称
+ * @brief 构造函数，初始化rokae_move节点。
+ * @param name 节点名称
  */
- Rokae_Force::Rokae_Force(std::string name) : Node(name)
+ Rokae_Move::Rokae_Move(std::string name) : Node(name)
+{
+    setup_ros_communications(); // 设置ROS通信
+    initialize_robot();        // 初始化机械臂
+}
+
+Rokae_Move::~Rokae_Move()
+{
+    // 一些关闭操作
+    robot->setMotionControlMode(rokae::MotionControlMode::NrtCommand, ec);
+    robot->setOperateMode(rokae::OperateMode::manual, ec);
+    robot->setPowerState(false, ec);
+    RCLCPP_INFO(this->get_logger(), "---珞石机械臂运动节点已关闭---.");
+}
+
+
+// -----------------------------------------------------------------------------------------------------------
+// ---------------------------------------------------私有成员函数----------------------------------------------
+// -----------------------------------------------------------------------------------------------------------
+
+/**
+ * @brief 初始化ROS通信，包括参数声明、话题订阅和发布
+ */
+void Rokae_Move::setup_ros_communications()
 {
     // 输出日志信息
     // RCLCPP_INFO(this->get_logger(), "Start to cartesian impedance control");
@@ -91,45 +115,17 @@ using namespace std;
         floatDesc("对角线Z-Y平面角度（度，0=Y轴负方向，90=Z轴负方向）", 0.00, 90.00, 0.01));
 
     // 订阅键盘输入
-    keyborad = this->create_subscription<std_msgs::msg::String>("/keystroke", 10, std::bind(&Rokae_Force::keyborad_callback, this, std::placeholders::_1));
+    keyborad = this->create_subscription<std_msgs::msg::String>("/keystroke", 10, std::bind(&Rokae_Move::keyborad_callback, this, std::placeholders::_1));
     // 发布笛卡尔位置
     command_publisher_ = this->create_publisher<std_msgs::msg::Float32MultiArray>("cartesian_pos", 10);
-
-    // --------------------------------------连接机械臂--------------------------------------
-    try
-    {
-        // 连接到机械臂
-        std::string remoteIP = "192.168.0.160";
-        std::string localIP = "192.168.0.10";
-        robot = std::make_shared<xMateErProRobot>(remoteIP, localIP);
-
-        RCLCPP_INFO(this->get_logger(), "---已连接到Rokae机械臂接口, 正在进行初始化---");
-
-        // 一些常规预设置
-        robot->setRtNetworkTolerance(50, ec);
-        robot->setOperateMode(rokae::OperateMode::automatic, ec);
-        // 若程序运行时控制器已经是实时模式，需要先切换到非实时模式后再更改网络延迟阈值，否则不生效
-        robot->setMotionControlMode(MotionControlMode::RtCommand, ec); // 实时模式
-        robot->setPowerState(true, ec);
-        RCLCPP_INFO(this->get_logger(), "---Robot powered on !---");
-        // 初始化 rtCon
-        rtCon = robot->getRtMotionController().lock();
-        RCLCPP_INFO(this->get_logger(), "---Robot initialization completed---");
-        // std::array<double, 7> q_drag_xm7p = {0, M_PI / 6, 0, M_PI / 3, 0, M_PI / 2, 0};
-        // rtCon->MoveJ(0.5, robot->jointPos(ec), q_drag_xm7p);
-        RCLCPP_INFO(this->get_logger(), "---Robot initial pose completed---");
-    }
-    catch (const std::exception &e)
-    {
-        std::cerr << e.what();
-    }
+    
     // 创建定时器，500ms为周期，定时发布
-    // timer_ = this->create_wall_timer(std::chrono::milliseconds(10), std::bind(&Rokae_Force::timer_callback, this));
+    // timer_ = this->create_wall_timer(std::chrono::milliseconds(10), std::bind(&Rokae_Move::timer_callback, this));
     
     // 添加力传感器数据订阅者
     force_subscription_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
         "force_sensor_data", 10,
-        std::bind(&Rokae_Force::force_callback, this, std::placeholders::_1));
+        std::bind(&Rokae_Move::force_callback, this, std::placeholders::_1));
     
     RCLCPP_INFO(this->get_logger(), "已创建力传感器数据订阅者");
 
@@ -140,30 +136,56 @@ using namespace std;
     // 创建位姿数据发布定时器(10Hz)
     pose_timer_ = this->create_wall_timer(
         std::chrono::milliseconds(100),
-        std::bind(&Rokae_Force::pubilsh_initial_pose, this));
+        std::bind(&Rokae_Move::pubilsh_initial_pose, this));
+
 }
 
 
-Rokae_Force::~Rokae_Force()
+/**
+ * @brief 初始化机械臂，包括连接、上电和控制模式设置等。均调用珞石SDK的API实现。
+ * 各注意事项见官方文档
+ */
+void Rokae_Move::initialize_robot()
 {
-    // 一些关闭操作
-    robot->setMotionControlMode(rokae::MotionControlMode::NrtCommand, ec);
-    robot->setOperateMode(rokae::OperateMode::manual, ec);
-    robot->setPowerState(false, ec);
-    RCLCPP_INFO(this->get_logger(), "---珞石机械臂运动节点已关闭---.");
+    // --------------------------------------连接机械臂--------------------------------------
+    try
+    {
+        // 连接到机械臂
+        std::string remoteIP = "192.168.0.160";
+        std::string localIP = "192.168.0.10";
+        robot = std::make_shared<xMateErProRobot>(remoteIP, localIP);
+
+        RCLCPP_INFO(this->get_logger(), "---已连接到Rokae机械臂接口, 正在进行初始化---");
+
+        // 机械臂初始化设置
+        robot->setRtNetworkTolerance(50, ec); // 网络延迟。若程序运行时控制器已经是实时模式，需要先切换到非实时模式后再更改网络延迟阈值，否则不生效
+        
+        robot->setOperateMode(rokae::OperateMode::automatic, ec); // 操作模式。自动
+        robot->setMotionControlMode(MotionControlMode::RtCommand, ec); // 控制模式：实时模式
+
+        robot->setPowerState(true, ec); // 上电
+        RCLCPP_INFO(this->get_logger(), "---机器人上电成功！操作模式：自动，控制模式：实时---");
+
+        // 初始化 rtCon
+        // 获取robot中的实时运动控制器对象getRtMotionController()，通过lock()将其转化为强指针并赋值给rtCon
+        rtCon = robot->getRtMotionController().lock(); 
+        RCLCPP_INFO(this->get_logger(), "---机器人初始化完成---");
+        // std::array<double, 7> q_drag_xm7p = {0, M_PI / 6, 0, M_PI / 3, 0, M_PI / 2, 0};
+        // rtCon->MoveJ(0.5, robot->jointPos(ec), q_drag_xm7p);
+        // RCLCPP_INFO(this->get_logger(), "---Robot initial pose completed---");
+    }
+    catch (const std::exception &e)
+    {
+        RCLCPP_FATAL(this->get_logger(), "Robot initialization failed: %s", e.what());
+        // 可以选择在这里关闭节点
+        rclcpp::shutdown();
+    }
 }
-
-
-// -----------------------------------------------------------------------------------------------------------
-// ---------------------------------------------------私有成员函数----------------------------------------------
-// -----------------------------------------------------------------------------------------------------------
-
-
 
 /**
  * @brief 用于在ros2中发布机械臂末端力/力矩、位姿数据消息
  */
-void Rokae_Force::publish_force_data()
+void Rokae_Move::publish_force_data()
 {
     try
     {
@@ -195,7 +217,7 @@ void Rokae_Force::publish_force_data()
     }
 }
 
-void Rokae_Force::timer_callback()
+void Rokae_Move::timer_callback()
 {
     publish_force_data();
 }
@@ -203,9 +225,11 @@ void Rokae_Force::timer_callback()
 /**
  * @brief 使用键盘按键进行相应的控制功能
  */
-std::string Rokae_Force::keyborad_callback(const std_msgs::msg::String::SharedPtr msg)
+std::string Rokae_Move::keyborad_callback(const std_msgs::msg::String::SharedPtr msg)
 {
-    // 获取需要的参数
+    // ！！！键盘按键触发后立刻获取需要的参数的最新值。这些函数会在rqt中受操作者改动。！！！
+    // ！！！所以必须在每次触发时获取最新值。！！！当前方式比较直接，后续可以改为参数回调函数。
+    // TODO: 改为参数回调函数
     this->get_parameter("cartesian_point", cartesian_points_string);
     this->get_parameter("velocity", velocity_command);
 
@@ -301,7 +325,7 @@ std::string Rokae_Force::keyborad_callback(const std_msgs::msg::String::SharedPt
 /**
  * @brief 启动拖拽模式
  */
-void Rokae_Force::move_enableDrag()
+void Rokae_Move::move_enableDrag()
 {
     try
     {
@@ -314,7 +338,7 @@ void Rokae_Force::move_enableDrag()
     }
 }
 
-void Rokae_Force::move_disableDrag()
+void Rokae_Move::move_disableDrag()
 {
     try
     {
@@ -335,7 +359,7 @@ void Rokae_Force::move_disableDrag()
     }
 }
 
-std::array<double, 6UL> Rokae_Force::string_to_array(const std::string &str)
+std::array<double, 6UL> Rokae_Move::string_to_array(const std::string &str)
 {
     std::array<double, 6UL> array;
     std::vector<double> vec;
@@ -353,7 +377,7 @@ std::array<double, 6UL> Rokae_Force::string_to_array(const std::string &str)
  * @brief 使用控制command进行轨迹控制
  * @param 
 */
-void Rokae_Force::go2cartesian(const std::array<double, 6UL> &car_vec)
+void Rokae_Move::go2cartesian(const std::array<double, 6UL> &car_vec)
 {
     try
     {
@@ -408,7 +432,7 @@ void Rokae_Force::go2cartesian(const std::array<double, 6UL> &car_vec)
 /**
  *  @brief reset robot 。自动回到设定的初始位置，如果初始位置定义改变，需要修改此函数的init_point
  */
-void Rokae_Force::move_init()
+void Rokae_Move::move_init()
 {
     try
     {
@@ -433,7 +457,7 @@ void Rokae_Force::move_init()
  * @param first_time 第一段时间
  * @param second_time 第二段时间
  */
-void Rokae_Force::cartesian_impedance_control(double desired_force_z, double first_time, double second_time)
+void Rokae_Move::cartesian_impedance_control(double desired_force_z, double first_time, double second_time)
 {
     try {
             // 获取当前位置
@@ -518,7 +542,7 @@ void Rokae_Force::cartesian_impedance_control(double desired_force_z, double fir
  * @param first_time 第一段时间
  * @param second_time 第二段时间
  */
-void Rokae_Force::usr_cartesian_force_control(double desired_force_z, double first_time, double second_time)
+void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double first_time, double second_time)
 {
     try {
             // 获取当前位置
@@ -596,7 +620,7 @@ void Rokae_Force::usr_cartesian_force_control(double desired_force_z, double fir
      * @param first_time 第一段时间
      * @param second_time 第二段时间
      */
-    void Rokae_Force::usr_rt_cartesian_control(double first_time, double second_time)
+    void Rokae_Move::usr_rt_cartesian_control(double first_time, double second_time)
     {
         try {
             // 停止初始位资发布（因为只需要让plojuggler读取到）
@@ -691,7 +715,7 @@ void Rokae_Force::usr_cartesian_force_control(double desired_force_z, double fir
      * @param target_speed 期望侵入速度
      * @
      */
-    void Rokae_Force::usr_rt_cartesian_v_control(
+    void Rokae_Move::usr_rt_cartesian_v_control(
         double z_air_dist, double z_cruise_dist, double z_decel_dist, double z_target_speed,
         double y_air_dist, double y_cruise_dist, double y_decel_dist, 
         double y_target_speed, int y_direction)
@@ -804,7 +828,7 @@ void Rokae_Force::usr_cartesian_force_control(double desired_force_z, double fir
         }
     }
 
-    void Rokae_Force::usr_rt_cartesian_v_control_z(double air_dist, double cruise_dist, double decel_dist, double target_speed)
+    void Rokae_Move::usr_rt_cartesian_v_control_z(double air_dist, double cruise_dist, double decel_dist, double target_speed)
     {
         usr_rt_cartesian_v_control(air_dist, cruise_dist, decel_dist, target_speed, 0.0, 0.0, 0.0, 0.0, 1);
     }
@@ -821,7 +845,7 @@ void Rokae_Force::usr_cartesian_force_control(double desired_force_z, double fir
      * @param diagonal_target_speed 对角线目标速度
      * @param gamma_deg Z-Y平面角度(度)
      */
-    void Rokae_Force::usr_rt_vertical_diagonal_control(
+    void Rokae_Move::usr_rt_vertical_diagonal_control(
         double vertical_air_dist, double vertical_cruise_dist, double vertical_decel_dist, double vertical_target_speed,
         double diagonal_air_dist, double diagonal_cruise_dist, double diagonal_decel_dist, double diagonal_target_speed,
         double gamma_deg)
@@ -945,7 +969,7 @@ void Rokae_Force::usr_cartesian_force_control(double desired_force_z, double fir
      * @brief 力数据订阅回调函数，用来获取最新的力数据
      * @param msg 力数据消息
      */
-    void Rokae_Force::force_callback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
+    void Rokae_Move::force_callback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
     {
         std::lock_guard<std::mutex> lock(force_data_mutex_);
         if(msg->data.size() >= 3) {
@@ -962,7 +986,7 @@ void Rokae_Force::usr_cartesian_force_control(double desired_force_z, double fir
      * @param current_pose 当前位姿
      * @param target_pose 目标位姿
      */
-    void Rokae_Force::publish_realtime_pose(const std::array<double, 6>& current_pose, 
+    void Rokae_Move::publish_realtime_pose(const std::array<double, 6>& current_pose, 
                          const std::array<double, 6>& target_pose) 
     {
         std_msgs::msg::Float32MultiArray msg;
@@ -982,7 +1006,7 @@ void Rokae_Force::usr_cartesian_force_control(double desired_force_z, double fir
     /**
      * @brief 初始位资发布。用于：让plotjuggler读取到初始位资，不然只有在callback运行时才会读取到。
      */
-    void Rokae_Force::pubilsh_initial_pose(){
+    void Rokae_Move::pubilsh_initial_pose(){
         try{
             // 获取当前位姿
             std::array<double, 6> current_pose = robot->posture(rokae::CoordinateType::flangeInBase, ec);
@@ -996,14 +1020,14 @@ void Rokae_Force::usr_cartesian_force_control(double desired_force_z, double fir
     }
 
     // 计算力控制调整量
-    double Rokae_Force::ForceController::calculateAdjustment(double current_force) {
+    double Rokae_Move::ForceController::calculateAdjustment(double current_force) {
         force_error = desired_force_z - current_force;
         force_integral += force_error;
         double adjustment = kp * force_error + ki * force_integral;
         return std::clamp(adjustment, -max_adjust, max_adjust);
     }
 
-    void Rokae_Force::ForceController::reset() {
+    void Rokae_Move::ForceController::reset() {
         force_integral = 0.0;
         force_error = 0.0;
     }
@@ -1013,7 +1037,7 @@ int main(int argc, char **argv)
     rclcpp::init(argc, argv);
     
     // 创建节点
-    auto node = std::make_shared<Rokae_Force>("rokae_force");
+    auto node = std::make_shared<Rokae_Move>("Rokae_Move");
     
     
     rclcpp::spin(node);

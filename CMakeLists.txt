@@ -3,9 +3,11 @@ project(rokae_move)
 
 # set(SHARED "SHARED")
 
+# 设定C++17标准
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# 设置编译输出信息为懒惰模式
 set(CMAKE_INSTALL_MESSAGE LAZY)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -51,18 +53,22 @@ endif()
 # add_executable(rokae_force_impedance src/rokae_force_impedance.cpp)
 # ament_target_dependencies(rokae_force_impedance  "moveit_ros_planning_interface"  rclcpp std_msgs Eigen3)
 
-add_executable(test_impedance_force_node src/test_impedance_force_node.cpp)
-ament_target_dependencies(test_impedance_force_node  "moveit_ros_planning_interface"  rclcpp std_msgs Eigen3)
+add_executable(rokae_move_node 
+  src/rokae_move_node.cpp
+  src/trajectory_generator.cpp)
 
+ament_target_dependencies(rokae_move_node  
+  "moveit_ros_planning_interface"  
+  rclcpp 
+  std_msgs Eigen3
+  tf2)
 
-# target_link_libraries(rokae_force ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
-# target_link_libraries(rokae_force ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
-
-# target_link_libraries(rokae_force_impedance ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
-# target_link_libraries(rokae_force_impedance ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
-
-target_link_libraries(test_impedance_force_node ${SHARED} xCoreSDK)  # 与使用到的xCoreSDK库进行链接
-target_link_libraries(test_impedance_force_node ${SHARED} xMateModel)  # 与使用到的xMateModel库进行链接
+# 链接外部库：  xCoreSDK xMateModel
+target_link_libraries(rokae_move_node
+  ${SHARED} 
+  xCoreSDK
+  xMateModel
+)
 
 
 install(
@@ -76,7 +82,7 @@ install(
 install(TARGETS
   # rokae_force
   # rokae_force_impedance
-  test_impedance_force_node
+  rokae_move_node
   EXPORT export_${PROJECT_NAME}
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib

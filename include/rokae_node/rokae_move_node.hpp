@@ -33,8 +33,8 @@
 class Rokae_Move : public rclcpp::Node
 {
 public:
-    Rokae_Move(std::string name); // 构造函数声明
-    ~Rokae_Move();   
+    Rokae_Move(std::string name); // 构造函数
+    ~Rokae_Move(); // 析构函数
 
 private:
     // ---------------------------------初始化------------------------------------
@@ -72,6 +72,8 @@ private:
     void pubilsh_initial_pose();
 
     // 所有成员变量声明
+    std::atomic<bool>force_trigger_{false}; // 力控触发标志。原子布尔变量。
+
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr command_publisher_;
 

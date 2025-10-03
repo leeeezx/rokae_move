@@ -23,9 +23,11 @@ using namespace rokae;
 using namespace std;
 
 
+
 /** 
  * @brief 构造函数，初始化rokae_move节点。
  * @param name 节点名称
+ * @note 构造函数与析构函数的名字必须与类名相同
  */
  Rokae_Move::Rokae_Move(std::string name) : Node(name)
 {
@@ -33,6 +35,9 @@ using namespace std;
     initialize_robot();        // 初始化机械臂
 }
 
+/**
+ * @brief 析构函数，关闭节点时进行清理工作
+ */
 Rokae_Move::~Rokae_Move()
 {
     // 一些关闭操作
@@ -313,6 +318,10 @@ std::string Rokae_Move::keyborad_callback(const std_msgs::msg::String::SharedPtr
             diagonal_air_dist, diagonal_cruise_dist, diagonal_decel_dist, diagonal_target_speed,  // 对角线段参数
             gamma_angle  // 对角线角度
         );
+        break;
+    case 't': // 用于测试布尔原子变量是否可以传递进机器人回调函数中
+        RCLCPP_INFO(this->get_logger(), "力控标志位触发，轨迹切换");
+        force_trigger_.store(true); // 设置为true
         break;
     default:
         RCLCPP_INFO(this->get_logger(), "你在狗叫什么");
@@ -767,12 +776,21 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
             std::atomic<bool> stopManually{true};
             int index = 0;
 
-            // 控制循环回调函数
+            // ------------------------------------------------机械臂控制循环回调函数--------------------------------------------------------
             // CartesianPosition output{}是给output进行类型定义
             std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
                 CartesianPosition output{};
 
-                // RCLCPP_INFO(this->get_logger(), "进入回调函数1");
+                if (force_trigger_.load()){ // 检测到力控触发标志
+                    RCLCPP_INFO(this->get_logger(), "检测到轨迹切换请求,生成并运行新轨迹...");
+
+                    force_trigger_.store(false); // 重置标志
+
+                    std::array<double, 6> current_pose; // 获取当前位置作为新轨迹的起点
+                    if(robot->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0) {
+                        // 生成新轨迹
+                        // TODO
+                }
 
                 if (index < int(trajectory.size())) {
                     // 获取目标轨迹点。这里的target_pose是当前的理论轨迹规划点
@@ -804,7 +822,7 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
                 return output;
             };
 
-            rtCon->setControlLoop(callback, 0, true);
+            rtCon->setControlLoop(callback, 0, true); // setControlLoop的返回值只能为关节角度/笛卡尔位姿/力矩
             rtCon->startLoop(false);
 
             // 控制循环

@@ -319,10 +319,10 @@ std::string Rokae_Move::keyborad_callback(const std_msgs::msg::String::SharedPtr
             gamma_angle  // 对角线角度
         );
         break;
-    case 't': // 用于测试布尔原子变量是否可以传递进机器人回调函数中
-        RCLCPP_INFO(this->get_logger(), "力控标志位触发，轨迹切换");
-        force_trigger_.store(true); // 设置为true
-        break;
+    // case 't': // 用于测试布尔原子变量是否可以传递进机器人回调函数中
+    //     RCLCPP_INFO(this->get_logger(), "力控标志位触发，轨迹切换");
+    //     force_trigger_.store(true); // 设置为true
+    //     break;
     default:
         RCLCPP_INFO(this->get_logger(), "你在狗叫什么");
         break;
@@ -783,18 +783,32 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
 
             bool tra2_init = false; // 轨迹2的起点初始化标志.默认为false，如果初始化成功则为true
 
-            const double total_lift = 0.1;
+            const double total_lift = 0.05;
             const double lift_duration_time = 3.0;
+
+            int callback_count = 0;
+            const int trigger_count = 15000; // 假设1ms周期,5000次 = 5秒
+            bool time_triggered = false; // 防止重复触发
 
             // ------------------------------------------------机械臂控制循环回调函数--------------------------------------------------------
             // CartesianPosition output{}是给output进行类型定义
             std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
                 CartesianPosition output{};
                 
+                // RCLCPP_INFO(this->get_logger(), "进入回调函数1");
+
+                callback_count++;
+                if (!time_triggered && callback_count >= trigger_count) {
+                    force_trigger_.store(true);
+                    time_triggered = true;
+                    RCLCPP_INFO(this->get_logger(), "计时器触发: %d次回调", callback_count);
+                }
+
+                // RCLCPP_INFO(this->get_logger(), "计时器检测完毕2");
 
                 // 检测：力阈值触发标志 与 轨迹状态。当力触发状态为真且当前轨迹为初始轨迹时，将
                 if (force_trigger_.load() && trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY){ 
-                    RCLCPP_INFO(this->get_logger(), "达到力阈值，触发轨迹切换请求,运行新轨迹...");
+                    RCLCPP_INFO(this->get_logger(), "======================达到力阈值，触发轨迹切换请求,运行新轨迹======================");
                     trajectory_state_.store(TrajectoryState::TRAJECTORY_2); // 切换轨迹状态为轨迹2
 
                     // 获取切换时刻的当前位置作为轨迹2起点
@@ -808,6 +822,8 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
                                 "轨迹2起点: [%.3f, %.3f, %.3f]",
                                 tra2_start_pose[0], tra2_start_pose[1], tra2_start_pose[2]);
                     } 
+                }else{
+                    // RCLCPP_INFO(this->get_logger(), "未触发新轨迹");
                 }
 
                 if (trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY) {

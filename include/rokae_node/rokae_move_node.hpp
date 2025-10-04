@@ -6,6 +6,7 @@
 // 基本消息类型库
 #include "std_msgs/msg/string.hpp"
 #include "std_msgs/msg/float32_multi_array.hpp"
+#include "std_msgs/msg/float32.hpp"
 // 珞石机械臂需要的库
 #include <thread>
 #include <cmath>
@@ -67,7 +68,7 @@ private:
                                          double diagonal_air_dist, double diagonal_cruise_dist, double diagonal_decel_dist, double diagonal_target_speed,
                                          double gamma_deg);
 
-    void force_callback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
+    void z_force_callback(const std_msgs::msg::Float32::SharedPtr msg);
     void publish_realtime_pose(const std::array<double, 6>& current_pose, const std::array<double, 6>& target_pose);
     void pubilsh_initial_pose();
 
@@ -83,6 +84,8 @@ private:
     std::atomic<bool>force_trigger_{false}; // 力控触发标志。原子布尔变量。
 
     rclcpp::TimerBase::SharedPtr timer_;
+    rclcpp::TimerBase::SharedPtr force_trigger_timer_;
+    
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr command_publisher_;
 
     std::shared_ptr<rokae::xMateErProRobot> robot; // 机械臂对象
@@ -123,7 +126,9 @@ private:
     } force_controller;
 
 
-    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr force_subscription_;
+    rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr z_force_subscription_;
+    std::atomic<double> latest_force_z_{0.0}; // 最新的Z轴力值，原子变量以确保线程安全
+
     std::unique_ptr<std::thread> force_thread_;
     bool force_thread_running_ = false;
     std::mutex force_data_mutex_;

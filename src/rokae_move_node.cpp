@@ -127,16 +127,18 @@ void Rokae_Move::setup_ros_communications()
     // 创建定时器，500ms为周期，定时发布
     // timer_ = this->create_wall_timer(std::chrono::milliseconds(10), std::bind(&Rokae_Move::timer_callback, this));
     
-    // 添加力传感器数据订阅者
-    force_subscription_ = this->create_subscription<std_msgs::msg::Float32MultiArray>(
-        "force_sensor_data", 10,
-        std::bind(&Rokae_Move::force_callback, this, std::placeholders::_1));
+    // 订阅
+    // 订阅 force_sensor_data 话题topic，使force_subscription_指向本订阅者(智能指针)
+    z_force_subscription_ = this->create_subscription<std_msgs::msg::Float32>(
+        "force_sensor_z", // 要订阅的topic的名称
+        10, // 队列深度（QoS）。表示最多缓存多少条未处理的消息。
+        std::bind(&Rokae_Move::z_force_callback, this, std::placeholders::_1)); // 回调函数。当订阅收到消息时，就会调用这个回调函数
     
-    RCLCPP_INFO(this->get_logger(), "已创建力传感器数据订阅者");
-
+    // 发布
     // 添加实时位姿数据发布者
     realtime_pose_publisher_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
-        "realtime_robot_pose", 10);
+        "realtime_robot_pose", // 要发布的topic的名称 
+        10); // 队列深度（QoS）。表示最多缓存多少条未处理的消息。
 
     // 创建位姿数据发布定时器(10Hz)
     pose_timer_ = this->create_wall_timer(
@@ -730,6 +732,7 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
         double y_target_speed, int y_direction)
     {
         try {
+            const double FORCE_THRESHOLD = 20.0; // 力触发阈值，单位：N
             // 参数校验，传入的距离和速度必须大于等于0
             const double EPSILON = 1e-10;
             if(z_air_dist <= EPSILON || z_cruise_dist <= EPSILON || z_decel_dist <= EPSILON || z_target_speed <= EPSILON) {
@@ -737,8 +740,26 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
                 return;
             }
 
+            // ============ 重置状态变量 ============
+            force_trigger_.store(false);  // 重置力触发标志
+            trajectory_state_.store(TrajectoryState::INITIAL_TRAJECTORY);  // 重置轨迹状态
+
             // 停止初始位资发布（因为只需要让plojuggler读取到）
             pose_timer_->cancel();
+
+            // force_trigger_timer_ = this->create_wall_timer(
+            //     std::chrono::milliseconds(10000),  // 15秒
+            //     [this]() {
+            //         if (!force_trigger_.load()) {
+            //             force_trigger_.store(true);
+            //             RCLCPP_INFO(this->get_logger(), "外部定时器触发");
+            //             // 触发后立即取消定时器，防止重复触发
+            //             force_trigger_timer_->cancel();
+            //         }
+            //     }
+            // );
+            // RCLCPP_INFO(this->get_logger(), "已启动力触发定时器");
+
 
             // 设置需要接收的机器人状态数据
             std::vector<std::string> fields = {RtSupportedFields::tcpPoseAbc_m, RtSupportedFields::tcpPose_m}; 
@@ -783,8 +804,8 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
 
             bool tra2_init = false; // 轨迹2的起点初始化标志.默认为false，如果初始化成功则为true
 
-            const double total_lift = 0.05;
-            const double lift_duration_time = 3.0;
+            const double total_lift = 0.05; // 轨迹2的上升总距离
+            const double lift_duration_time = 3.0; // 轨迹2的上升持续时间
 
             int callback_count = 0;
             const int trigger_count = 15000; // 假设1ms周期,5000次 = 5秒
@@ -793,16 +814,25 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
             // ------------------------------------------------机械臂控制循环回调函数--------------------------------------------------------
             // CartesianPosition output{}是给output进行类型定义
             std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
+                double current_z_force = latest_force_z_.load();
                 CartesianPosition output{};
                 
                 // RCLCPP_INFO(this->get_logger(), "进入回调函数1");
 
-                callback_count++;
-                if (!time_triggered && callback_count >= trigger_count) {
-                    force_trigger_.store(true);
-                    time_triggered = true;
-                    RCLCPP_INFO(this->get_logger(), "计时器触发: %d次回调", callback_count);
+                // 检测：力阈值。当当前力大于设定阈值且当前轨迹为初始轨迹时，设置力触发标志为真
+                if (current_z_force > FORCE_THRESHOLD && trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY){
+                    // 只有在第一次触发时才打印日志，避免刷屏
+                    if (!force_trigger_.load()) {
+                        RCLCPP_INFO(this->get_logger(), "力阈值触发！当前力: %.2f N, 阈值: %.2f N", current_z_force, FORCE_THRESHOLD);
+                        force_trigger_.store(true); // 设置触发标志
+                    }
                 }
+                // callback_count++;
+                // if (!time_triggered && callback_count >= trigger_count) {
+                //     force_trigger_.store(true);
+                //     time_triggered = true;
+                //     RCLCPP_INFO(this->get_logger(), "计时器触发: %d次回调", callback_count);
+                // }
 
                 // RCLCPP_INFO(this->get_logger(), "计时器检测完毕2");
 
@@ -887,9 +917,15 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
 
             // 控制循环进行
             while(stopManually.load()) {
+                // rclcpp::spin_some(this->get_node_base_interface());
                 // std::this_thread::sleep_for(std::chrono::milliseconds(1)); 
             }
             
+            // if (force_trigger_timer_) { // 清理定时器
+            //     force_trigger_timer_->cancel();
+            //     force_trigger_timer_.reset();
+            // }
+
             // 停止
             rtCon->stopLoop();
             rtCon->stopMove();
@@ -897,11 +933,22 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
             pose_timer_->reset();
             RCLCPP_INFO(this->get_logger(), "实时轨迹控制完成");
 
+            // ============ 退出时再次重置状态 ============
+            force_trigger_.store(false);
+            trajectory_state_.store(TrajectoryState::INITIAL_TRAJECTORY);
+
         } catch (const std::exception &e) {
+            // if (force_trigger_timer_) { // 清理定时器
+            //     force_trigger_timer_->cancel();
+            //     force_trigger_timer_.reset();
+            // }
+        
             pose_timer_->reset();
             robot->stopReceiveRobotState(); // 确保停止接收数据
             rtCon->stopLoop();
             rtCon->stopMove();
+            force_trigger_.store(false);
+            trajectory_state_.store(TrajectoryState::INITIAL_TRAJECTORY);
             RCLCPP_ERROR(this->get_logger(), "实时轨迹控制错误: %s", e.what());
         }
     }
@@ -1035,27 +1082,19 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
     }
 
     // 添加订阅者成员变量
-    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr force_subscription_;
+    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr z_force_subscription_;
     // 添加线程相关成员变量
     std::unique_ptr<std::thread> force_thread_;              // 力数据读取线程
     bool force_thread_running_ = false;                      // 线程运行标志
-    std::mutex force_data_mutex_;                           // 互斥锁
-    std::condition_variable force_data_cv_;                 // 条件变量
-    std::array<double, 3> latest_force_data_{{0.0, 0.0, 0.0}}; // 最新力数据
+
 
     /**
      * @brief 力数据订阅回调函数，用来获取最新的力数据
      * @param msg 力数据消息
      */
-    void Rokae_Move::force_callback(const std_msgs::msg::Float32MultiArray::SharedPtr msg)
+    void Rokae_Move::z_force_callback(const std_msgs::msg::Float32::SharedPtr msg)
     {
-        std::lock_guard<std::mutex> lock(force_data_mutex_);
-        if(msg->data.size() >= 3) {
-            latest_force_data_[0] = msg->data[0];
-            latest_force_data_[1] = msg->data[1];
-            latest_force_data_[2] = msg->data[2];
-        }
-        force_data_cv_.notify_one();
+         latest_force_z_.store(msg->data); 
     }
 
     /**
@@ -1082,7 +1121,7 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
     }
 
     /**
-     * @brief 初始位资发布。用于：让plotjuggler读取到初始位资，不然只有在callback运行时才会读取到。
+     * @brief 初始位姿发布。用于：让plotjuggler读取到初始位资，不然只有在callback运行时才会读取到。
      */
     void Rokae_Move::pubilsh_initial_pose(){
         try{
@@ -1116,9 +1155,12 @@ int main(int argc, char **argv)
     
     // 创建节点
     auto node = std::make_shared<Rokae_Move>("Rokae_Move");
+
+    // 使用多线程执行器
+    rclcpp::executors::MultiThreadedExecutor executor;
+    executor.add_node(node);
+    executor.spin(); // 执行器会用它的线程池来处理所有回调
     
-    
-    rclcpp::spin(node);
     rclcpp::shutdown();
     return 0;
 }

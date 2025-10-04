@@ -741,8 +741,8 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
             pose_timer_->cancel();
 
             // 设置需要接收的机器人状态数据
-            std::vector<std::string> fields = {RtSupportedFields::tcpPoseAbc_m}; // 接收末端位姿数据
-            robot->startReceiveRobotState(std::chrono::milliseconds(1), fields); // 1ms采样周期
+            std::vector<std::string> fields = {RtSupportedFields::tcpPoseAbc_m, RtSupportedFields::tcpPose_m}; 
+            robot->startReceiveRobotState(std::chrono::milliseconds(1), fields); // 启动接收机器人数据。1ms采样周期
             
             // 获取当前位置
             std::array<double, 6UL> start = robot->posture(rokae::CoordinateType::flangeInBase, ec);
@@ -773,67 +773,111 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
             // 启动笛卡尔空间位置控制模式
             rtCon->startMove(RtControllerMode::cartesianPosition);
             
-            std::atomic<bool> stopManually{true};
+            std::atomic<bool> stopManually{true}; // 停止标志，如果为false就会跳出while循环，然后执行一系列停止命令
             int index = 0;
+
+            double time = 0.0; // 轨迹2的计算频率数值
+
+            std::array<double, 6> tra2_start_pose; // 轨迹2的实时起点 ,array6D
+            std::array<double, 16> tra2_start_pose_m; //轨迹2的实时起点，array16D行优先矩阵
+
+            bool tra2_init = false; // 轨迹2的起点初始化标志.默认为false，如果初始化成功则为true
+
+            const double total_lift = 0.1;
+            const double lift_duration_time = 3.0;
 
             // ------------------------------------------------机械臂控制循环回调函数--------------------------------------------------------
             // CartesianPosition output{}是给output进行类型定义
             std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
                 CartesianPosition output{};
+                
 
-                if (force_trigger_.load()){ // 检测到力控触发标志
-                    RCLCPP_INFO(this->get_logger(), "检测到轨迹切换请求,生成并运行新轨迹...");
+                // 检测：力阈值触发标志 与 轨迹状态。当力触发状态为真且当前轨迹为初始轨迹时，将
+                if (force_trigger_.load() && trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY){ 
+                    RCLCPP_INFO(this->get_logger(), "达到力阈值，触发轨迹切换请求,运行新轨迹...");
+                    trajectory_state_.store(TrajectoryState::TRAJECTORY_2); // 切换轨迹状态为轨迹2
 
-                    force_trigger_.store(false); // 重置标志
-
-                    std::array<double, 6> current_pose; // 获取当前位置作为新轨迹的起点
-                    if(robot->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0) {
-                        // 生成新轨迹
-                        // TODO
+                    // 获取切换时刻的当前位置作为轨迹2起点
+                    // tcpPoseAbc_m:末端位姿, 相对于基坐标系 [X,Y,Z,Rx,Ry,Rz] - Array6d
+                    // tcpPose_m:末端位姿, 相对于基坐标系, 行优先齐次变换矩阵 - Array16D
+                    if (robot->getStateData(RtSupportedFields::tcpPoseAbc_m, tra2_start_pose) == 0 &&
+                        robot->getStateData(RtSupportedFields::tcpPose_m, tra2_start_pose_m) == 0) {
+                        tra2_init = true; // 标志位置为true，表示轨迹2起点已初始化
+                        time = 0.0;  // 重置时间
+                        RCLCPP_INFO(this->get_logger(), 
+                                "轨迹2起点: [%.3f, %.3f, %.3f]",
+                                tra2_start_pose[0], tra2_start_pose[1], tra2_start_pose[2]);
+                    } 
                 }
 
-                if (index < int(trajectory.size())) {
-                    // 获取目标轨迹点。这里的target_pose是当前的理论轨迹规划点
-                    auto target_pose = trajectory[index];
-                    Utils::postureToTransArray(target_pose, output.pos);
-                    // RCLCPP_INFO(this->get_logger(), "轨迹控制2");
-                    
-                    // 获取实时位姿
-                    // robot->updateRobotState(std::chrono::milliseconds(1));
-                    std::array<double, 6> current_pose;
-                    if(robot->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0) {
-                        // RCLCPP_INFO(this->get_logger(), "更新位姿信息3: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
-                        //             current_pose[0], current_pose[1], current_pose[2],
-                        //             current_pose[3], current_pose[4], current_pose[5]);
-                        // 更新最新位姿数据
-                        std::lock_guard<std::mutex> lock(pose_data_mutex_);
-                        latest_current_pose_ = current_pose;
-                        latest_target_pose_ = target_pose;
-
-                        publish_realtime_pose(latest_current_pose_, latest_target_pose_);
+                if (trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY) {
+                    // ==================================初始轨迹==================================
+                    if (index < int(trajectory.size())) {
+                        auto target_pose = trajectory[index]; // 获取目标轨迹点。这里的target_pose是当前的理论轨迹规划点
+                        Utils::postureToTransArray(target_pose, output.pos); // 把target_pose转换成output.pos格式（16位矩阵）
+                        
+                        // 获取实时位姿
+                        std::array<double, 6> current_pose;
+                        if(robot->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0) {
+                            // 更新最新位姿数据
+                            std::lock_guard<std::mutex> lock(pose_data_mutex_);
+                            latest_current_pose_ = current_pose;
+                            latest_target_pose_ = target_pose;
+    
+                            publish_realtime_pose(latest_current_pose_, latest_target_pose_);
+                        }
+    
+                        index++;
+                    } else {
+                        output.setFinished();
+                        stopManually.store(false);
                     }
 
-                    index++;
-                } else {
+                }else{
+                    // ==================================轨迹2==================================
+                    // TODO 发布位姿数据。
+                    // 初始化检查
+                    if (!tra2_init) {
+                    RCLCPP_ERROR(this->get_logger(), "轨迹2未初始化!");
                     output.setFinished();
                     stopManually.store(false);
+                    return output;
+                    }
+
+                    // 轨迹2方案：直线上升一段距离
+                    if (time < lift_duration_time){
+                        double t_norm = time / lift_duration_time;  // 归一化 [0,1]
+                        
+                        // 余弦函数轨迹。此处表上升
+                        double angle = M_PI / 4 * (1 - std::cos(M_PI / 2 * t_norm));
+                        double delta_z = -total_lift * (std::cos(angle) - 1);  // 加负号反转
+                        // Utils::postureToTransArray(tra2_start_pose, output.pos);
+                        output.pos = tra2_start_pose_m;
+                        output.pos[11] += delta_z; // 直接修改16d矩阵的11位（第四列第三行）
+
+                        time += 0.001;
+                    }else{
+                        output.setFinished();
+                        stopManually.store(false);
+                    }
                 }
                 
                 return output;
             };
 
+            // 设置控制循环回调函数
             rtCon->setControlLoop(callback, 0, true); // setControlLoop的返回值只能为关节角度/笛卡尔位姿/力矩
-            rtCon->startLoop(false);
+            rtCon->startLoop(false); // 启动循环
 
-            // 控制循环
+            // 控制循环进行
             while(stopManually.load()) {
                 // std::this_thread::sleep_for(std::chrono::milliseconds(1)); 
             }
             
-            // 停止接收机器人状态数据
+            // 停止
             rtCon->stopLoop();
             rtCon->stopMove();
-            robot->stopReceiveRobotState();
+            robot->stopReceiveRobotState(); // 停止接收机器人状态数据
             pose_timer_->reset();
             RCLCPP_INFO(this->get_logger(), "实时轨迹控制完成");
 

@@ -71,7 +71,15 @@ private:
     void publish_realtime_pose(const std::array<double, 6>& current_pose, const std::array<double, 6>& target_pose);
     void pubilsh_initial_pose();
 
-    // 所有成员变量声明
+    // -----------------------------------------------------------------------------------------------------------------
+    // -------------------------------------------------------所有成员变量声明---------------------------------------------
+    // -----------------------------------------------------------------------------------------------------------------
+    enum class TrajectoryState {
+        INITIAL_TRAJECTORY,    // 初始轨迹
+        TRAJECTORY_2   // 轨迹2.目前设置为紧急切换轨迹
+    };
+    
+    std::atomic<TrajectoryState> trajectory_state_{TrajectoryState::INITIAL_TRAJECTORY}; //轨迹状态标志
     std::atomic<bool>force_trigger_{false}; // 力控触发标志。原子布尔变量。
 
     rclcpp::TimerBase::SharedPtr timer_;

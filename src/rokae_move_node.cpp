@@ -732,7 +732,8 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
         double y_target_speed, int y_direction)
     {
         try {
-            const double FORCE_THRESHOLD = 20.0; // 力触发阈值，单位：N
+            // const double FORCE_THRESHOLD = 2.0; // 力触发阈值，单位：kg
+
             // 参数校验，传入的距离和速度必须大于等于0
             const double EPSILON = 1e-10;
             if(z_air_dist <= EPSILON || z_cruise_dist <= EPSILON || z_decel_dist <= EPSILON || z_target_speed <= EPSILON) {
@@ -762,7 +763,12 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
 
 
             // 设置需要接收的机器人状态数据
-            std::vector<std::string> fields = {RtSupportedFields::tcpPoseAbc_m, RtSupportedFields::tcpPose_m}; 
+            std::vector<std::string> fields = {RtSupportedFields::tcpPoseAbc_m, 
+                                                RtSupportedFields::tcpPose_m,
+                                                RtSupportedFields::tau_m,
+                                                RtSupportedFields::tauExt_inBase, //< 基坐标系中外部力矩 [Nm] - Array6D
+                                                RtSupportedFields::tauExt_inStiff,//< 力控坐标系中外部力矩 [Nm] - Array6D
+                                            }; 
             robot->startReceiveRobotState(std::chrono::milliseconds(1), fields); // 启动接收机器人数据。1ms采样周期
             
             // 获取当前位置
@@ -814,19 +820,21 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
             // ------------------------------------------------机械臂控制循环回调函数--------------------------------------------------------
             // CartesianPosition output{}是给output进行类型定义
             std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
-                double current_z_force = latest_force_z_.load();
+                // double current_z_force = latest_force_z_.load();
+                // RCLCPP_INFO(this->get_logger(), "当前受力为%.1f", current_z_force); // 这里获取最新力数据是无效的，获取卡在最初的值
                 CartesianPosition output{};
                 
                 // RCLCPP_INFO(this->get_logger(), "进入回调函数1");
 
                 // 检测：力阈值。当当前力大于设定阈值且当前轨迹为初始轨迹时，设置力触发标志为真
-                if (current_z_force > FORCE_THRESHOLD && trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY){
-                    // 只有在第一次触发时才打印日志，避免刷屏
-                    if (!force_trigger_.load()) {
-                        RCLCPP_INFO(this->get_logger(), "力阈值触发！当前力: %.2f N, 阈值: %.2f N", current_z_force, FORCE_THRESHOLD);
-                        force_trigger_.store(true); // 设置触发标志
-                    }
-                }
+                // if (current_z_force > FORCE_THRESHOLD && trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY){
+                //     // 只有在第一次触发时才打印日志，避免刷屏
+                //     if (!force_trigger_.load()) {
+                //         RCLCPP_INFO(this->get_logger(), "力阈值触发！当前力: %.2f N, 阈值: %.2f N", current_z_force, FORCE_THRESHOLD);
+                //         force_trigger_.store(true); // 设置触发标志
+                //     }
+                // }
+
                 // callback_count++;
                 // if (!time_triggered && callback_count >= trigger_count) {
                 //     force_trigger_.store(true);
@@ -836,7 +844,13 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
 
                 // RCLCPP_INFO(this->get_logger(), "计时器检测完毕2");
 
-                // 检测：力阈值触发标志 与 轨迹状态。当力触发状态为真且当前轨迹为初始轨迹时，将
+                // 检测：力阈值触发标志 与 轨迹状态。当力触发状态为真且当前轨迹为初始轨迹时，
+                // 在这里调用外部检查函数，返回值赋值给一个新变量，这个变量参与后续工作
+                const bool trigger = z_force_check();
+                if (trigger && !force_trigger_.load()) {
+                    force_trigger_.store(true);
+                    RCLCPP_INFO(this->get_logger(), "力阈值触发，准备切换轨迹");
+                }
                 if (force_trigger_.load() && trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY){ 
                     RCLCPP_INFO(this->get_logger(), "======================达到力阈值，触发轨迹切换请求,运行新轨迹======================");
                     trajectory_state_.store(TrajectoryState::TRAJECTORY_2); // 切换轨迹状态为轨迹2
@@ -864,13 +878,24 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
                         
                         // 获取实时位姿
                         std::array<double, 6> current_pose;
-                        if(robot->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0) {
+                        std::array<double, 7> current_tau_m;
+                        std::array<double, 6> current_ext_tau_base;
+                        std::array<double, 6> current_ext_tau_stiff;
+                        if(robot->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0 &&
+                           robot->getStateData(RtSupportedFields::tau_m, current_tau_m) == 0 &&
+                           robot->getStateData(RtSupportedFields::tauExt_inBase, current_ext_tau_base) == 0 &&
+                           robot->getStateData(RtSupportedFields::tauExt_inStiff, current_ext_tau_stiff) == 0) {
                             // 更新最新位姿数据
                             std::lock_guard<std::mutex> lock(pose_data_mutex_);
                             latest_current_pose_ = current_pose;
                             latest_target_pose_ = target_pose;
+
+                            latest_current_tau_m_ = current_tau_m;
+
+                            latest_current_ext_tau_base_ = current_ext_tau_base;
+                            latest_current_ext_tau_stiff_ = current_ext_tau_stiff;
     
-                            publish_realtime_pose(latest_current_pose_, latest_target_pose_);
+                            publish_realtime_ext_tau(latest_current_ext_tau_base_);
                         }
     
                         index++;
@@ -1094,8 +1119,23 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
      */
     void Rokae_Move::z_force_callback(const std_msgs::msg::Float32::SharedPtr msg)
     {
-         latest_force_z_.store(msg->data); 
+        latest_force_z_.store(msg->data); 
+        // RCLCPP_INFO(this->get_logger(), "接收到力数据: %.2f N", msg->data);
+        // RCLCPP_INFO(this->get_logger(), "=================ros订阅者接收到力数据: %.2f N=====================", latest_force_z_.load());
     }
+
+    // 让这个函数去检查力阈值，然后让callback来调用这个函数，这个函数应该返回一个bool。
+    bool Rokae_Move::z_force_check(double force_threshold)
+    {
+        // RCLCPP_INFO(this->get_logger(),"进入z_force_check");
+        constexpr double DEFAULT_FORCE_THRESHOLD = 2.0;
+        const double threshold = force_threshold > 0.0 ? force_threshold : DEFAULT_FORCE_THRESHOLD;
+        // RCLCPP_INFO(this->get_logger(),"开始判断");
+        bool is_triggered = latest_force_z_.load() >= threshold;
+        // RCLCPP_INFO(this->get_logger(), "调用z_force_check成功， 当前力: %.2f N, 阈值: %.2f N", latest_force_z_.load(), threshold);
+        return is_triggered;
+    }
+
 
     /**
      * @brief 发布实时位姿数据到话题。本质上是发布current_pose的前三位和target_pose的前三位，组成一个六位数据，
@@ -1120,6 +1160,48 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
         realtime_pose_publisher_->publish(msg);
     }
 
+
+    void Rokae_Move::publish_realtime_pose_tau(const std::array<double, 6>& current_pose, 
+                         const std::array<double, 7>& current_tau_m) 
+    {
+        std_msgs::msg::Float32MultiArray msg;
+        // 将当前位姿和目标位姿打包到一起发布
+        // [current_x, current_y, current_z, target_x, target_y, target_z]
+        msg.data = {
+            static_cast<float>(current_pose[0]),
+            static_cast<float>(current_pose[1]),
+            static_cast<float>(current_pose[2]),
+            static_cast<float>(current_tau_m[0]),
+            static_cast<float>(current_tau_m[1]),
+            static_cast<float>(current_tau_m[2]),
+            static_cast<float>(current_tau_m[3]),
+            static_cast<float>(current_tau_m[4]),
+            static_cast<float>(current_tau_m[5]),
+            static_cast<float>(current_tau_m[6]),
+        };
+        realtime_pose_publisher_->publish(msg);
+    }
+
+    /**
+     * @brief 发布实时外部力/力矩数据到话题
+     * @param current_ext_tau 当前外部力/力矩数据
+     */
+    void Rokae_Move::publish_realtime_ext_tau(const std::array<double, 6>& current_ext_tau)
+    {
+        std_msgs::msg::Float32MultiArray msg;
+        
+        msg.data = {
+            static_cast<float>(current_ext_tau[0]),
+            static_cast<float>(current_ext_tau[1]),
+            static_cast<float>(current_ext_tau[2]),
+            static_cast<float>(current_ext_tau[3]),
+            static_cast<float>(current_ext_tau[4]),
+            static_cast<float>(current_ext_tau[5])
+        };
+
+        realtime_pose_publisher_->publish(msg);
+    }
+
     /**
      * @brief 初始位姿发布。用于：让plotjuggler读取到初始位资，不然只有在callback运行时才会读取到。
      */
@@ -1127,10 +1209,11 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
         try{
             // 获取当前位姿
             std::array<double, 6> current_pose = robot->posture(rokae::CoordinateType::flangeInBase, ec);
+            std::array<double, 7> current_joint_torque = robot->jointTorque(ec);
 
             // 发布当前位姿(目标位姿设置为当前位姿)
             std::lock_guard<std::mutex> lock(pose_data_mutex_);
-            publish_realtime_pose(current_pose, current_pose);
+            publish_realtime_pose_tau(current_pose, current_joint_torque);
         }catch (const std::exception &e) {
             RCLCPP_WARN(this->get_logger(), "Error publishing initial pose: %s", e.what());
         }

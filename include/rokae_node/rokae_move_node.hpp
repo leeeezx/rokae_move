@@ -69,7 +69,12 @@ private:
                                          double gamma_deg);
 
     void z_force_callback(const std_msgs::msg::Float32::SharedPtr msg);
+
+    bool z_force_check(double force_threshold = 2.0);
     void publish_realtime_pose(const std::array<double, 6>& current_pose, const std::array<double, 6>& target_pose);
+    void publish_realtime_pose_tau(const std::array<double, 6>& current_pose, const std::array<double, 7>& current_tau_m);
+    void publish_realtime_ext_tau(const std::array<double, 6>& current_ext_tau);
+
     void pubilsh_initial_pose();
 
     // -----------------------------------------------------------------------------------------------------------------
@@ -139,5 +144,8 @@ private:
     std::mutex pose_data_mutex_;
     std::array<double, 6> latest_current_pose_{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
     std::array<double, 6> latest_target_pose_{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+    std::array<double, 7> latest_current_tau_m_{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+    std::array<double, 6> latest_current_ext_tau_base_{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+    std::array<double, 6> latest_current_ext_tau_stiff_{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
     rclcpp::TimerBase::SharedPtr pose_timer_;
 };

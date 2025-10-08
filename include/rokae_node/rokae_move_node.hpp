@@ -7,6 +7,7 @@
 #include "std_msgs/msg/string.hpp"
 #include "std_msgs/msg/float32_multi_array.hpp"
 #include "std_msgs/msg/float32.hpp"
+#include "geometry_msgs/msg/wrench_stamped.hpp" 
 // 珞石机械臂需要的库
 #include <thread>
 #include <cmath>
@@ -45,7 +46,6 @@ private:
 
     // 所有成员函数声明
     void publish_force_data();
-    void timer_callback();
 
     // 键盘输入回调函数
     std::string keyborad_callback(const std_msgs::msg::String::SharedPtr msg);
@@ -67,6 +67,7 @@ private:
     void usr_rt_vertical_diagonal_control(double vertical_air_dist, double vertical_cruise_dist, double vertical_decel_dist, double vertical_target_speed,
                                          double diagonal_air_dist, double diagonal_cruise_dist, double diagonal_decel_dist, double diagonal_target_speed,
                                          double gamma_deg);
+    void usr_rt_stationary_control(double hold_duration);
 
     void z_force_callback(const std_msgs::msg::Float32::SharedPtr msg);
 
@@ -153,7 +154,9 @@ private:
     std::array<double, 6> latest_current_ext_tau_stiff_{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
     // ====================================== 发布者 ======================================
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr realtime_pose_publisher_;
-    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr realtime_FandTau_publisher_;
+    // rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr realtime_FandTau_publisher_;
+
+    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr realtime_FandTau_publisher_; // 加了Stamped
     
     // ======================================== 定时器 ========================================
     rclcpp::TimerBase::SharedPtr pose_timer_;

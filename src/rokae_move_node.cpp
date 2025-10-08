@@ -22,6 +22,9 @@
 using namespace rokae;
 using namespace std;
 
+// -----------------------------------------------------------------------------------------------------------
+// ---------------------------------------------------公共成员函数----------------------------------------------
+// -----------------------------------------------------------------------------------------------------------
 
 
 /** 
@@ -29,7 +32,7 @@ using namespace std;
  * @param name 节点名称
  * @note 构造函数与析构函数的名字必须与类名相同
  */
- Rokae_Move::Rokae_Move(std::string name) : Node(name)
+Rokae_Move::Rokae_Move(std::string name) : Node(name)
 {
     setup_ros_communications(); // 设置ROS通信
     initialize_robot();        // 初始化机械臂
@@ -140,18 +143,22 @@ void Rokae_Move::setup_ros_communications()
         "realtime_robot_pose", // 要发布的topic的名称 
         10); // 队列深度（QoS）。表示最多缓存多少条未处理的消息。
 
-    realtime_FandTau_publisher_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
+    // realtime_FandTau_publisher_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
+    //     "realtime_robot_FandTau", 
+    //     10);
+
+    realtime_FandTau_publisher_ = this->create_publisher<geometry_msgs::msg::WrenchStamped>( 
         "realtime_robot_FandTau", 
-        10);
+        10); // 这个是加了stamped的
 
     // 定时器原理：每隔设定的时间周期，就会调用一次指定的回调函数，回调函数中还可以进一步调用其他函数，例如调用发布函数，发布的相关数据都与最终调用的发布函数有关
     // 创建位姿数据发布定时器(10Hz)
     pose_timer_ = this->create_wall_timer(
-        std::chrono::milliseconds(100),
+        std::chrono::milliseconds(10),
         std::bind(&Rokae_Move::publish_initial_pose, this));
     
     FandTau_timer_ = this->create_wall_timer(
-        std::chrono::milliseconds(100),
+        std::chrono::milliseconds(10),
         std::bind(&Rokae_Move::publish_initial_ext_FandTau, this));
 
 }
@@ -233,10 +240,6 @@ void Rokae_Move::publish_force_data()
     }
 }
 
-void Rokae_Move::timer_callback()
-{
-    publish_force_data();
-}
 
 /**
  * @brief 使用键盘按键进行相应的控制功能
@@ -270,6 +273,8 @@ std::string Rokae_Move::keyborad_callback(const std_msgs::msg::String::SharedPtr
     double diagonal_decel_dist = this->get_parameter("diagonal_decel_distance").as_double();
     double diagonal_target_speed = this->get_parameter("diagonal_target_speed").as_double();
     double gamma_angle = this->get_parameter("gamma_angle").as_double();
+
+    double hold_duration;
     
     // 收到键盘消息
     RCLCPP_INFO(this->get_logger(), "收到键盘按下的消息---%s", msg->data.c_str());
@@ -330,10 +335,9 @@ std::string Rokae_Move::keyborad_callback(const std_msgs::msg::String::SharedPtr
             gamma_angle  // 对角线角度
         );
         break;
-    // case 't': // 用于测试布尔原子变量是否可以传递进机器人回调函数中
-    //     RCLCPP_INFO(this->get_logger(), "力控标志位触发，轨迹切换");
-    //     force_trigger_.store(true); // 设置为true
-    //     break;
+    case 't': // 用于测试布尔原子变量是否可以传递进机器人回调函数中
+        usr_rt_stationary_control(hold_duration = 20);
+        break;
     default:
         RCLCPP_INFO(this->get_logger(), "你在狗叫什么");
         break;
@@ -342,6 +346,23 @@ std::string Rokae_Move::keyborad_callback(const std_msgs::msg::String::SharedPtr
     return key;
 }
 
+std::array<double, 6UL> Rokae_Move::string_to_array(const std::string &str)
+{
+    std::array<double, 6UL> array;
+    std::vector<double> vec;
+    std::stringstream ss(str);
+    std::string buf;
+    while (ss >> buf)
+        vec.push_back(atof(buf.c_str()));
+    for (uint64_t index = 0; index < vec.size(); ++index)
+        array[index] = vec[index];
+
+    return array;
+}
+
+// ==============================================================================================================
+// ================================================= 运动控制相关 =================================================
+// ==============================================================================================================
 /**
  * @brief 启动拖拽模式
  */
@@ -379,19 +400,6 @@ void Rokae_Move::move_disableDrag()
     }
 }
 
-std::array<double, 6UL> Rokae_Move::string_to_array(const std::string &str)
-{
-    std::array<double, 6UL> array;
-    std::vector<double> vec;
-    std::stringstream ss(str);
-    std::string buf;
-    while (ss >> buf)
-        vec.push_back(atof(buf.c_str()));
-    for (uint64_t index = 0; index < vec.size(); ++index)
-        array[index] = vec[index];
-
-    return array;
-}
 
 /** 
  * @brief 使用控制command进行轨迹控制
@@ -635,12 +643,12 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
         }
     }
 
-    /**
-     * @brief 实时模式纯轨迹控制，速度不可控
-     * @param first_time 第一段时间
-     * @param second_time 第二段时间
-     */
-    void Rokae_Move::usr_rt_cartesian_control(double first_time, double second_time)
+/**
+ * @brief 实时模式纯轨迹控制，速度不可控
+ * @param first_time 第一段时间
+ * @param second_time 第二段时间
+ */
+void Rokae_Move::usr_rt_cartesian_control(double first_time, double second_time)
     {
         try {
             // 停止初始位资发布（因为只需要让plojuggler读取到）
@@ -727,18 +735,18 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
         }
     }
 
-    /**
-     * @brief 实时模式纯轨迹控制，速度可控
-     * @param ari_dist 空中加速段距离
-     * @param cruise_dist 匀速侵入段距离
-     * @param decel_dist 减速缓冲段距离
-     * @param target_speed 期望侵入速度
-     * @
-     */
-    void Rokae_Move::usr_rt_cartesian_v_control(
-        double z_air_dist, double z_cruise_dist, double z_decel_dist, double z_target_speed,
-        double y_air_dist, double y_cruise_dist, double y_decel_dist, 
-        double y_target_speed, int y_direction)
+/**
+ * @brief 实时模式纯轨迹控制，速度可控
+ * @param ari_dist 空中加速段距离
+ * @param cruise_dist 匀速侵入段距离
+ * @param decel_dist 减速缓冲段距离
+ * @param target_speed 期望侵入速度
+ * @
+ */
+void Rokae_Move::usr_rt_cartesian_v_control(
+    double z_air_dist, double z_cruise_dist, double z_decel_dist, double z_target_speed,
+    double y_air_dist, double y_cruise_dist, double y_decel_dist, 
+    double y_target_speed, int y_direction)
     {
         try {
             // const double FORCE_THRESHOLD = 2.0; // 力触发阈值，单位：kg
@@ -988,27 +996,27 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
         }
     }
 
-    void Rokae_Move::usr_rt_cartesian_v_control_z(double air_dist, double cruise_dist, double decel_dist, double target_speed)
+void Rokae_Move::usr_rt_cartesian_v_control_z(double air_dist, double cruise_dist, double decel_dist, double target_speed)
     {
         usr_rt_cartesian_v_control(air_dist, cruise_dist, decel_dist, target_speed, 0.0, 0.0, 0.0, 0.0, 1);
     }
 
-    /**
-     * @brief 实时模式：垂直下压 + 特定角度轨迹运动控制
-     * @param vertical_air_dist 垂直下压加速段距离
-     * @param vertical_cruise_dist 垂直下压匀速段距离
-     * @param vertical_decel_dist 垂直下压减速段距离
-     * @param vertical_target_speed 垂直下压目标速度
-     * @param diagonal_air_dist 对角线加速段距离
-     * @param diagonal_cruise_dist 对角线匀速段距离
-     * @param diagonal_decel_dist 对角线减速段距离
-     * @param diagonal_target_speed 对角线目标速度
-     * @param gamma_deg Z-Y平面角度(度)
-     */
-    void Rokae_Move::usr_rt_vertical_diagonal_control(
-        double vertical_air_dist, double vertical_cruise_dist, double vertical_decel_dist, double vertical_target_speed,
-        double diagonal_air_dist, double diagonal_cruise_dist, double diagonal_decel_dist, double diagonal_target_speed,
-        double gamma_deg)
+/**
+ * @brief 实时模式：垂直下压 + 特定角度轨迹运动控制
+ * @param vertical_air_dist 垂直下压加速段距离
+ * @param vertical_cruise_dist 垂直下压匀速段距离
+ * @param vertical_decel_dist 垂直下压减速段距离
+ * @param vertical_target_speed 垂直下压目标速度
+ * @param diagonal_air_dist 对角线加速段距离
+ * @param diagonal_cruise_dist 对角线匀速段距离
+ * @param diagonal_decel_dist 对角线减速段距离
+ * @param diagonal_target_speed 对角线目标速度
+ * @param gamma_deg Z-Y平面角度(度)
+ */
+void Rokae_Move::usr_rt_vertical_diagonal_control(
+    double vertical_air_dist, double vertical_cruise_dist, double vertical_decel_dist, double vertical_target_speed,
+    double diagonal_air_dist, double diagonal_cruise_dist, double diagonal_decel_dist, double diagonal_target_speed,
+    double gamma_deg)
     {
         try {
             // 参数校验
@@ -1116,6 +1124,100 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
         }
     }
 
+
+/**
+ * @brief 实时模式：保持当前位置静止
+ * @param hold_duration 静止持续时间（秒）
+ */
+void Rokae_Move::usr_rt_stationary_control(double hold_duration = 20)
+{
+    try {
+        // 参数校验
+        if(hold_duration <= 0.0) {
+            RCLCPP_ERROR(this->get_logger(), "静止时间必须大于0!");
+            return;
+        }
+
+        // 停止初始位姿发布
+        pose_timer_->cancel();
+        FandTau_timer_->cancel();
+
+        // 设置需要接收的机器人状态数据
+        std::vector<std::string> fields = {RtSupportedFields::tcpPoseAbc_m,
+                                        RtSupportedFields::tcpPose_m, // 末端位姿，16D矩阵
+                                        RtSupportedFields::tauExt_inBase,}; 
+        robot->startReceiveRobotState(std::chrono::milliseconds(1), fields);
+        
+        // 获取当前位置作为保持位置
+        std::array<double, 6UL> hold_pose = robot->posture(rokae::CoordinateType::flangeInBase, ec);
+        RCLCPP_INFO(this->get_logger(), "保持位置: [%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]", 
+                    hold_pose[0], hold_pose[1], hold_pose[2],
+                    hold_pose[3], hold_pose[4], hold_pose[5]);
+        
+        // 启动笛卡尔空间位置控制模式
+        rtCon->startMove(RtControllerMode::cartesianPosition);
+        
+        std::atomic<bool> stopManually{true};
+        double elapsed_time = 0.0;  // 已经过时间（秒）
+        const double dt = 0.001;    // 控制周期 1ms
+        
+        // 控制循环回调函数
+        std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
+            CartesianPosition output{};
+
+            if (elapsed_time < hold_duration) {
+                // 持续输出相同的目标位置
+                Utils::postureToTransArray(hold_pose, output.pos);
+                
+                
+                std::array<double, 6> current_pose;
+                std::array<double, 6> current_ext_tau_base;
+                if(robot->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0 &&
+                   robot->getStateData(RtSupportedFields::tauExt_inBase, current_ext_tau_base) == 0) {
+
+                    latest_current_pose_ = current_pose;
+                    latest_current_ext_tau_base_ = current_ext_tau_base;
+                    // latest_target_pose_ = hold_pose;
+                    publish_realtime_ext_FandTau(latest_current_ext_tau_base_);
+                }
+
+                elapsed_time += dt;
+                
+            } else {
+                output.setFinished();
+                stopManually.store(false);
+                RCLCPP_INFO(this->get_logger(), "静止控制完成，总时长: %.2f 秒", elapsed_time);
+            }
+            
+            return output;
+        };
+
+        rtCon->setControlLoop(callback, 0, true);
+        rtCon->startLoop(false);
+
+        // 控制循环
+        while(stopManually.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        
+        // 停止
+        rtCon->stopLoop();
+        rtCon->stopMove();
+        robot->stopReceiveRobotState();
+        pose_timer_->reset();
+        FandTau_timer_->reset();
+        RCLCPP_INFO(this->get_logger(), "实时静止控制完成\n-------------------------------");
+
+    } catch (const std::exception &e) {
+        pose_timer_->reset();
+        FandTau_timer_->reset();
+        robot->stopReceiveRobotState();
+        rtCon->stopLoop();
+        rtCon->stopMove();
+        RCLCPP_ERROR(this->get_logger(), "实时静止控制错误: %s", e.what());
+    }
+}
+
     // 添加订阅者成员变量
     rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr z_force_subscription_;
     // 添加线程相关成员变量
@@ -1123,184 +1225,198 @@ void Rokae_Move::usr_cartesian_force_control(double desired_force_z, double firs
     bool force_thread_running_ = false;                      // 线程运行标志
 
 
-    /**
-     * @brief 力数据订阅回调函数，用来获取最新的力数据
-     * @param msg 力数据消息
-     */
-    void Rokae_Move::z_force_callback(const std_msgs::msg::Float32::SharedPtr msg)
-    {
-        latest_force_z_.store(msg->data); 
-        // RCLCPP_INFO(this->get_logger(), "接收到力数据: %.2f N", msg->data);
-        // RCLCPP_INFO(this->get_logger(), "=================ros订阅者接收到力数据: %.2f N=====================", latest_force_z_.load());
+// =====================================================================================================
+// =========================================== 发布接受信息相关 ===========================================
+// =====================================================================================================
+
+/**
+ * @brief 力数据订阅回调函数，用来获取最新的力数据
+ * @param msg 力数据消息
+ */
+void Rokae_Move::z_force_callback(const std_msgs::msg::Float32::SharedPtr msg)
+{
+    latest_force_z_.store(msg->data); 
+    // RCLCPP_INFO(this->get_logger(), "接收到力数据: %.2f N", msg->data);
+    // RCLCPP_INFO(this->get_logger(), "=================ros订阅者接收到力数据: %.2f N=====================", latest_force_z_.load());
+}
+
+// 让这个函数去检查力阈值，然后让callback来调用这个函数，这个函数应该返回一个bool。
+bool Rokae_Move::z_force_check(double force_threshold)
+{
+    // RCLCPP_INFO(this->get_logger(),"进入z_force_check");
+    constexpr double DEFAULT_FORCE_THRESHOLD = 2.0;
+    const double threshold = force_threshold > 0.0 ? force_threshold : DEFAULT_FORCE_THRESHOLD;
+    // RCLCPP_INFO(this->get_logger(),"开始判断");
+    bool is_triggered = latest_force_z_.load() >= threshold;
+    // RCLCPP_INFO(this->get_logger(), "调用z_force_check成功， 当前力: %.2f N, 阈值: %.2f N", latest_force_z_.load(), threshold);
+    return is_triggered;
+}
+
+
+/**
+ * @brief 发布实时位姿数据到话题。本质上是发布current_pose的前三位和target_pose的前三位，组成一个六位数据，
+ *        可以自定义传入参数从而改变发送数据。
+ * @param current_pose 当前位姿
+ * @param target_pose 目标位姿
+ */
+void Rokae_Move::publish_realtime_pose(const std::array<double, 6>& current_pose, 
+                        const std::array<double, 6>& target_pose) 
+{
+    std_msgs::msg::Float32MultiArray msg;
+    // 将当前位姿和目标位姿打包到一起发布
+    // [current_x, current_y, current_z, target_x, target_y, target_z]
+    msg.data = {
+        static_cast<float>(current_pose[0]),
+        static_cast<float>(current_pose[1]),
+        static_cast<float>(current_pose[2]),
+        static_cast<float>(target_pose[0]),
+        static_cast<float>(target_pose[1]),
+        static_cast<float>(target_pose[2])
+    };
+    realtime_pose_publisher_->publish(msg);
+}
+
+
+void Rokae_Move::publish_realtime_pose_JointTau(const std::array<double, 6>& current_pose, 
+                        const std::array<double, 7>& current_tau_m) 
+{
+    std_msgs::msg::Float32MultiArray msg;
+    // 将当前位姿和目标位姿打包到一起发布
+    // [current_x, current_y, current_z, target_x, target_y, target_z]
+    msg.data = {
+        static_cast<float>(current_pose[0]),
+        static_cast<float>(current_pose[1]),
+        static_cast<float>(current_pose[2]),
+        static_cast<float>(current_tau_m[0]),
+        static_cast<float>(current_tau_m[1]),
+        static_cast<float>(current_tau_m[2]),
+        static_cast<float>(current_tau_m[3]),
+        static_cast<float>(current_tau_m[4]),
+        static_cast<float>(current_tau_m[5]),
+        static_cast<float>(current_tau_m[6]),
+    };
+    realtime_pose_publisher_->publish(msg);
+}
+
+/**
+ * @brief 发布实时外部力/力矩数据到话题
+ * @param current_ext_tau 当前外部力/力矩数据
+ */
+void Rokae_Move::publish_realtime_ext_FandTau(const std::array<double, 6>& current_ext_tau)
+{
+    // std_msgs::msg::Float32MultiArray msg;
+    geometry_msgs::msg::WrenchStamped msg; // 使用WrenchStamped消息类型
+    msg.header.stamp = this->now(); // 设置时间戳
+    
+    // 普通Float32MultiArray消息设置
+    // msg.data = {
+    //     static_cast<float>(current_ext_tau[0]),
+    //     static_cast<float>(current_ext_tau[1]),
+    //     static_cast<float>(current_ext_tau[2]),
+    //     static_cast<float>(current_ext_tau[3]),
+    //     static_cast<float>(current_ext_tau[4]),
+    //     static_cast<float>(current_ext_tau[5])
+    // };
+    // Wrench消息设置
+    msg.wrench.force.x = current_ext_tau[0];
+    msg.wrench.force.y = current_ext_tau[1];
+    msg.wrench.force.z = current_ext_tau[2];
+    msg.wrench.torque.x = current_ext_tau[3];
+    msg.wrench.torque.y = current_ext_tau[4];
+    msg.wrench.torque.z = current_ext_tau[5];
+
+    realtime_FandTau_publisher_->publish(msg);
+}
+
+/**
+ * @brief 初始位姿发布。用于：让plotjuggler读取到初始位资，不然只有在callback运行时才会读取到。
+ */
+void Rokae_Move::publish_initial_pose(){
+    try{
+        // 获取当前位姿
+        std::array<double, 6> current_pose = robot->posture(rokae::CoordinateType::flangeInBase, ec);
+
+        // 发布当前位姿(目标位姿设置为当前位姿)
+        std::lock_guard<std::mutex> lock(pose_data_mutex_);
+        publish_realtime_pose(current_pose, current_pose);
+    }catch (const std::exception &e) {
+        RCLCPP_WARN(this->get_logger(), "Error publishing initial pose: %s", e.what());
     }
-
-    // 让这个函数去检查力阈值，然后让callback来调用这个函数，这个函数应该返回一个bool。
-    bool Rokae_Move::z_force_check(double force_threshold)
-    {
-        // RCLCPP_INFO(this->get_logger(),"进入z_force_check");
-        constexpr double DEFAULT_FORCE_THRESHOLD = 2.0;
-        const double threshold = force_threshold > 0.0 ? force_threshold : DEFAULT_FORCE_THRESHOLD;
-        // RCLCPP_INFO(this->get_logger(),"开始判断");
-        bool is_triggered = latest_force_z_.load() >= threshold;
-        // RCLCPP_INFO(this->get_logger(), "调用z_force_check成功， 当前力: %.2f N, 阈值: %.2f N", latest_force_z_.load(), threshold);
-        return is_triggered;
-    }
+}
 
 
-    /**
-     * @brief 发布实时位姿数据到话题。本质上是发布current_pose的前三位和target_pose的前三位，组成一个六位数据，
-     *        可以自定义传入参数从而改变发送数据。
-     * @param current_pose 当前位姿
-     * @param target_pose 目标位姿
-     */
-    void Rokae_Move::publish_realtime_pose(const std::array<double, 6>& current_pose, 
-                         const std::array<double, 6>& target_pose) 
-    {
-        std_msgs::msg::Float32MultiArray msg;
-        // 将当前位姿和目标位姿打包到一起发布
-        // [current_x, current_y, current_z, target_x, target_y, target_z]
-        msg.data = {
-            static_cast<float>(current_pose[0]),
-            static_cast<float>(current_pose[1]),
-            static_cast<float>(current_pose[2]),
-            static_cast<float>(target_pose[0]),
-            static_cast<float>(target_pose[1]),
-            static_cast<float>(target_pose[2])
-        };
-        realtime_pose_publisher_->publish(msg);
-    }
+/**
+ * @brief 初始位姿发布。用于：让plotjuggler读取到初始位资，不然只有在callback运行时才会读取到。
+ */
+void Rokae_Move::publish_initial_ext_FandTau(){
+    try{
+        // 声明所有需要的输出参数
+        std::array<double, 7> joint_torque_measured;      // 各轴测量力
+        std::array<double, 7> external_torque_measured;   // 各轴外部力
+        std::array<double, 3> cart_torque;                 // 笛卡尔空间力矩 [X, Y, Z]
+        std::array<double, 3> cart_force;                  // 笛卡尔空间力 [X, Y, Z]
 
+        robot->getEndTorque(
+            FrameType::flange,           // 或 FrameType::flange, FrameType::tool
+            joint_torque_measured,      // 输出：各轴测量力
+            external_torque_measured,   // 输出：各轴外部力
+            cart_torque,                // 输出：笛卡尔空间力矩
+            cart_force,                 // 输出：笛卡尔空间力
+            ec                          // 输出：错误码
+        );
 
-    void Rokae_Move::publish_realtime_pose_JointTau(const std::array<double, 6>& current_pose, 
-                         const std::array<double, 7>& current_tau_m) 
-    {
-        std_msgs::msg::Float32MultiArray msg;
-        // 将当前位姿和目标位姿打包到一起发布
-        // [current_x, current_y, current_z, target_x, target_y, target_z]
-        msg.data = {
-            static_cast<float>(current_pose[0]),
-            static_cast<float>(current_pose[1]),
-            static_cast<float>(current_pose[2]),
-            static_cast<float>(current_tau_m[0]),
-            static_cast<float>(current_tau_m[1]),
-            static_cast<float>(current_tau_m[2]),
-            static_cast<float>(current_tau_m[3]),
-            static_cast<float>(current_tau_m[4]),
-            static_cast<float>(current_tau_m[5]),
-            static_cast<float>(current_tau_m[6]),
-        };
-        realtime_pose_publisher_->publish(msg);
-    }
-
-    /**
-     * @brief 发布实时外部力/力矩数据到话题
-     * @param current_ext_tau 当前外部力/力矩数据
-     */
-    void Rokae_Move::publish_realtime_ext_FandTau(const std::array<double, 6>& current_ext_tau)
-    {
-        std_msgs::msg::Float32MultiArray msg;
-        
-        msg.data = {
-            static_cast<float>(current_ext_tau[0]),
-            static_cast<float>(current_ext_tau[1]),
-            static_cast<float>(current_ext_tau[2]),
-            static_cast<float>(current_ext_tau[3]),
-            static_cast<float>(current_ext_tau[4]),
-            static_cast<float>(current_ext_tau[5])
-        };
-
-        realtime_FandTau_publisher_->publish(msg);
-    }
-
-    /**
-     * @brief 初始位姿发布。用于：让plotjuggler读取到初始位资，不然只有在callback运行时才会读取到。
-     */
-    void Rokae_Move::publish_initial_pose(){
-        try{
-            // 获取当前位姿
-            std::array<double, 6> current_pose = robot->posture(rokae::CoordinateType::flangeInBase, ec);
-
-            // 发布当前位姿(目标位姿设置为当前位姿)
-            std::lock_guard<std::mutex> lock(pose_data_mutex_);
-            publish_realtime_pose(current_pose, current_pose);
-        }catch (const std::exception &e) {
-            RCLCPP_WARN(this->get_logger(), "Error publishing initial pose: %s", e.what());
+        // 检查是否有错误
+        if(ec) {
+            RCLCPP_WARN(this->get_logger(), "获取力/力矩数据失败: %s", ec.message().c_str());
+            return;
         }
+
+        std::array<double, 6> combined_force_torque;
+        combined_force_torque[0] = -cart_force[0]; // 取反
+        combined_force_torque[1] = cart_force[1]; 
+        combined_force_torque[2] = -cart_force[2]; // 取反
+        combined_force_torque[3] = cart_torque[0];
+        combined_force_torque[4] = cart_torque[1];
+        combined_force_torque[5] = cart_torque[2];
+
+        // 发布当前位姿(目标位姿设置为当前位姿)
+        std::lock_guard<std::mutex> lock(pose_data_mutex_);
+        publish_realtime_ext_FandTau(combined_force_torque);
+    }catch (const std::exception &e) {
+        RCLCPP_WARN(this->get_logger(), "Error publishing initial pose: %s", e.what());
     }
+}
 
 
-    /**
-     * @brief 初始位姿发布。用于：让plotjuggler读取到初始位资，不然只有在callback运行时才会读取到。
-     */
-    void Rokae_Move::publish_initial_ext_FandTau(){
-        try{
-            // 声明所有需要的输出参数
-            std::array<double, 7> joint_torque_measured;      // 各轴测量力
-            std::array<double, 7> external_torque_measured;   // 各轴外部力
-            std::array<double, 3> cart_torque;                 // 笛卡尔空间力矩 [X, Y, Z]
-            std::array<double, 3> cart_force;                  // 笛卡尔空间力 [X, Y, Z]
+/**
+ * @brief 初始位姿与关节力矩发布。用于：让plotjuggler读取到初始位资，不然只有在callback运行时才会读取到。
+ */
+void Rokae_Move::publish_initial_pose_JointTau(){
+    try{
+        // 获取当前位姿
+        std::array<double, 6> current_pose = robot->posture(rokae::CoordinateType::flangeInBase, ec);
+        std::array<double, 7> current_joint_torque = robot->jointTorque(ec);
 
-            robot->getEndTorque(
-                FrameType::world,           // 或 FrameType::flange, FrameType::tool
-                joint_torque_measured,      // 输出：各轴测量力
-                external_torque_measured,   // 输出：各轴外部力
-                cart_torque,                // 输出：笛卡尔空间力矩
-                cart_force,                 // 输出：笛卡尔空间力
-                ec                          // 输出：错误码
-            );
-
-            // 检查是否有错误
-            if(ec) {
-                RCLCPP_WARN(this->get_logger(), "获取力/力矩数据失败: %s", ec.message().c_str());
-                return;
-            }
-
-            std::array<double, 6> combined_force_torque;
-            combined_force_torque[0] = cart_force[0];
-            combined_force_torque[1] = cart_force[1];
-            combined_force_torque[2] = cart_force[2];
-            combined_force_torque[3] = cart_torque[0];
-            combined_force_torque[4] = cart_torque[1];
-            combined_force_torque[5] = cart_torque[2];
-
-            // 发布当前位姿(目标位姿设置为当前位姿)
-            std::lock_guard<std::mutex> lock(pose_data_mutex_);
-            publish_realtime_ext_FandTau(combined_force_torque);
-        }catch (const std::exception &e) {
-            RCLCPP_WARN(this->get_logger(), "Error publishing initial pose: %s", e.what());
-        }
+        // 发布当前位姿(目标位姿设置为当前位姿)
+        std::lock_guard<std::mutex> lock(pose_data_mutex_);
+        publish_realtime_pose_JointTau(current_pose, current_joint_torque);
+    }catch (const std::exception &e) {
+        RCLCPP_WARN(this->get_logger(), "Error publish_initial_pose_JointTau: %s", e.what());
     }
+}
 
+// 计算力控制调整量
+double Rokae_Move::ForceController::calculateAdjustment(double current_force) {
+    force_error = desired_force_z - current_force;
+    force_integral += force_error;
+    double adjustment = kp * force_error + ki * force_integral;
+    return std::clamp(adjustment, -max_adjust, max_adjust);
+}
 
-    /**
-     * @brief 初始位姿与关节力矩发布。用于：让plotjuggler读取到初始位资，不然只有在callback运行时才会读取到。
-     */
-    void Rokae_Move::publish_initial_pose_JointTau(){
-        try{
-            // 获取当前位姿
-            std::array<double, 6> current_pose = robot->posture(rokae::CoordinateType::flangeInBase, ec);
-            std::array<double, 7> current_joint_torque = robot->jointTorque(ec);
-
-            // 发布当前位姿(目标位姿设置为当前位姿)
-            std::lock_guard<std::mutex> lock(pose_data_mutex_);
-            publish_realtime_pose_JointTau(current_pose, current_joint_torque);
-        }catch (const std::exception &e) {
-            RCLCPP_WARN(this->get_logger(), "Error publish_initial_pose_JointTau: %s", e.what());
-        }
-    }
-
-    // 计算力控制调整量
-    double Rokae_Move::ForceController::calculateAdjustment(double current_force) {
-        force_error = desired_force_z - current_force;
-        force_integral += force_error;
-        double adjustment = kp * force_error + ki * force_integral;
-        return std::clamp(adjustment, -max_adjust, max_adjust);
-    }
-
-    void Rokae_Move::ForceController::reset() {
-        force_integral = 0.0;
-        force_error = 0.0;
-    }
+void Rokae_Move::ForceController::reset() {
+    force_integral = 0.0;
+    force_error = 0.0;
+}
 
 int main(int argc, char **argv)
 {

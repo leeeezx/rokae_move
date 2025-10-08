@@ -55,6 +55,7 @@ endif()
 
 add_executable(rokae_move_node 
   src/rokae_move_node.cpp
+  src/rokae_robot_controller.cpp
   src/trajectory_generator.cpp)
 
 ament_target_dependencies(rokae_move_node  

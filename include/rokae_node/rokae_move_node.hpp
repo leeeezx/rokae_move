@@ -9,26 +9,16 @@
 #include "std_msgs/msg/float32.hpp"
 #include "geometry_msgs/msg/wrench_stamped.hpp" 
 // 珞石机械臂需要的库
-#include <thread>
-#include <cmath>
-#include "rokae_move/robot.h"
-#include "rokae_move/utility.h"
-#include "rokae_move/print_helper.hpp"
-#include "rokae_move/motion_control_rt.h"
 #include <memory>
-#include "nlohmann/json.hpp"
-#include <sstream>
-#include <geometry_msgs/msg/quaternion.hpp>
-#include <tf2/LinearMath/Quaternion.h>
-#include <tf2/LinearMath/Matrix3x3.h>
-
-#include <fcntl.h>
-#include <unistd.h>
-#include <sys/stat.h>
-#include <sys/types.h>
 #include <mutex>
-#include <condition_variable>
-#include <filesystem> 
+
+#include "rokae_node/rokae_robot_controller.hpp"
+
+
+namespace rokae {
+    class xMateErProRobot;
+    template <unsigned short DoF> class RtMotionControlCobot;
+}
 
 
 // 创建Rokae_Move类。直接继承rclcpp::Node，使rokae_move成为ros2的节点
@@ -37,129 +27,74 @@ class Rokae_Move : public rclcpp::Node
 public:
     Rokae_Move(std::string name); // 构造函数
     ~Rokae_Move(); // 析构函数
+    
+    // ================================================= 包含发布者的函数 =================================================
+    void publish_realtime_pose(const std::array<double, 6>& current_pose, const std::array<double, 6>& target_pose);
+    void publish_realtime_pose_JointTau(const std::array<double, 6>& current_pose, const std::array<double, 7>& current_tau_m);
+    void publish_realtime_ext_FandTau(const std::array<double, 6>& current_ext_tau);
+    
+    
+    //  定时器 
+    rclcpp::TimerBase::SharedPtr pose_timer_;
+    rclcpp::TimerBase::SharedPtr FandTau_timer_;
+
+    rclcpp::TimerBase::SharedPtr force_trigger_timer_;
+
+    // 回调函数
+    bool z_force_check(double force_threshold = 2.0); 
+
 
 private:
-    // ---------------------------------初始化------------------------------------
+    // ================================= 初始化 ====================================
     void setup_ros_communications(); // 用于设置所有ROS相关的部分
     void initialize_robot();         // 用于初始化珞石机器人
 
 
     // 所有成员函数声明
-    void publish_force_data();
+    
 
-    // 键盘输入回调函数
-    std::string keyborad_callback(const std_msgs::msg::String::SharedPtr msg);
-
-    void move_enableDrag();
-    void move_disableDrag();
-
-    std::array<double, 6UL> string_to_array(const std::string &str);
-
-    void go2cartesian(const std::array<double, 6UL> &car_vec);
-    void move_init();
-    void cartesian_impedance_control(double desired_force_z, double first_time, double second_time);
-    void usr_cartesian_force_control(double desired_force_z, double first_time, double second_time);
-    void usr_rt_cartesian_control(double first_time, double second_time);
-    void usr_rt_cartesian_v_control(double z_air_dist, double z_cruise_dist, double z_decel_dist, double z_target_speed,
-                                   double y_air_dist = 0.0, double y_cruise_dist = 0.0, double y_decel_dist = 0.0, 
-                                   double y_target_speed = 0.0, int y_direction = 1);
-    void usr_rt_cartesian_v_control_z(double air_dist, double cruise_dist, double decel_dist, double target_speed);
-    void usr_rt_vertical_diagonal_control(double vertical_air_dist, double vertical_cruise_dist, double vertical_decel_dist, double vertical_target_speed,
-                                         double diagonal_air_dist, double diagonal_cruise_dist, double diagonal_decel_dist, double diagonal_target_speed,
-                                         double gamma_deg);
-    void usr_rt_stationary_control(double hold_duration);
+    // ==================================== 回调函数 ====================================
+    void keyborad_callback(const std_msgs::msg::String::SharedPtr msg); // 键盘输入回调函数
 
     void z_force_callback(const std_msgs::msg::Float32::SharedPtr msg);
-
-    bool z_force_check(double force_threshold = 2.0);
-
-    // ================================================= 包含发布者的函数 =================================================
-    void publish_realtime_pose(const std::array<double, 6>& current_pose, const std::array<double, 6>& target_pose);
-    void publish_realtime_pose_JointTau(const std::array<double, 6>& current_pose, const std::array<double, 7>& current_tau_m);
-    void publish_realtime_ext_FandTau(const std::array<double, 6>& current_ext_tau);
-
+    
+    
+    // ======================================== 定时器调用的发布函数 ========================================
     void publish_initial_pose();
     void publish_initial_pose_JointTau();
     void publish_initial_ext_FandTau();
-
-    // -----------------------------------------------------------------------------------------------------------------
-    // -------------------------------------------------------所有成员变量声明---------------------------------------------
-    // -----------------------------------------------------------------------------------------------------------------
-    enum class TrajectoryState {
-        INITIAL_TRAJECTORY,    // 初始轨迹
-        TRAJECTORY_2   // 轨迹2.目前设置为紧急切换轨迹
-    };
     
-    std::atomic<TrajectoryState> trajectory_state_{TrajectoryState::INITIAL_TRAJECTORY}; //轨迹状态标志
-    std::atomic<bool>force_trigger_{false}; // 力控触发标志。原子布尔变量。
-
-    rclcpp::TimerBase::SharedPtr timer_;
-    rclcpp::TimerBase::SharedPtr force_trigger_timer_;
+    // ======================================== 辅助函数 ========================================
+    std::array<double, 6UL> string_to_array(const std::string &str);
     
-    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr command_publisher_;
 
+    // =================================================================================================================
+    // ======================================================= 成员变量 =============================================
+    // =================================================================================================================
     std::shared_ptr<rokae::xMateErProRobot> robot; // 机械臂对象
     std::shared_ptr<rokae::RtMotionControlCobot<7U>> rtCon; // 机械臂实时运动控制对象
+    std::error_code ec; // 错误码ec
 
-    std::error_code ec; // 错误玛ec
+    // --- 我们的机器人控制器 ---
+    std::unique_ptr<RobotController> robot_controller_;
 
-    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr keyborad;
-    std::string key;
-    
-    std::string cartesian_points_string;
-    
-    std::array<double, 6UL> cartesian_points_array;
-    
-    std::array<double, 7> joint_torque_measured;
-    std::array<double, 7> external_torque_measured;
-    std::array<double, 3> cart_torque;
-    std::array<double, 3> cart_force;
-    std::array<double, 6> cartesian_array;
-    
-    std::string velocity_command;
-    std::atomic<int> publish_counter{0};
-
-
-
-
-    // 力控结构体
-    struct ForceController {
-        double desired_force_z = -5.0;
-        double force_error = 0.0;
-        double force_integral = 0.0;
-        double kp = 0.0005;
-        double ki = 0.0001;
-        double max_adjust = 0.001;
-        
-        double calculateAdjustment(double current_force);
-        void reset();
-    } force_controller;
-
-
-    rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr z_force_subscription_;
-    std::atomic<double> latest_force_z_{0.0}; // 最新的Z轴力值，原子变量以确保线程安全
-
-    std::unique_ptr<std::thread> force_thread_;
-    bool force_thread_running_ = false;
-    std::mutex force_data_mutex_;
-    std::condition_variable force_data_cv_;
-    std::array<double, 3> latest_force_data_{{0.0, 0.0, 0.0}};
-    
-    
-    std::mutex pose_data_mutex_;
-    std::array<double, 6> latest_current_pose_{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
-    std::array<double, 6> latest_target_pose_{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
-    std::array<double, 7> latest_current_tau_m_{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
-    std::array<double, 6> latest_current_ext_tau_base_{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
-    std::array<double, 6> latest_current_ext_tau_stiff_{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
-    // ====================================== 发布者 ======================================
+    // ====================================== ROS通信 ======================================
+    // 发布者 
+    // 机械臂信息
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr realtime_pose_publisher_;
     // rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr realtime_FandTau_publisher_;
-
+    
     rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr realtime_FandTau_publisher_; // 加了Stamped
+
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr keyborad;
     
-    // ======================================== 定时器 ========================================
-    rclcpp::TimerBase::SharedPtr pose_timer_;
-    rclcpp::TimerBase::SharedPtr FandTau_timer_;
+    std::string cartesian_points_string;
+    std::string velocity;
+    std::atomic<double> latest_force_z_{0.0}; // 最新的Z轴力值，原子变量以确保线程安全
     
+    std::array<double, 6UL> points_array;
+        
+    
+    rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr z_force_subscription_;
+        
 };

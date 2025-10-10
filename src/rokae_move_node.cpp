@@ -33,14 +33,14 @@ Rokae_Move::Rokae_Move(std::string name) : Node(name)
 }
 
 /**
- * @brief 析构函数，关闭节点时进行清理工作
+ * @brief 析构函数，关闭节点时进行清理工作。即按下ctrl+c后会执行的操作。
  */
 Rokae_Move::~Rokae_Move()
 {
-    // // 一些关闭操作
-    // robot->setMotionControlMode(rokae::MotionControlMode::NrtCommand, ec);
-    // robot->setOperateMode(rokae::OperateMode::manual, ec);
-    // robot->setPowerState(false, ec);
+    // 一些关闭操作
+    robot->setMotionControlMode(rokae::MotionControlMode::NrtCommand, ec);
+    robot->setOperateMode(rokae::OperateMode::manual, ec);
+    robot->setPowerState(false, ec);
     RCLCPP_INFO(this->get_logger(), "---珞石机械臂运动节点已关闭---.");
 }
 
@@ -75,7 +75,7 @@ void Rokae_Move::setup_ros_communications()
 
     // 参数声明
     this->declare_parameter("cartesian_point(command)", "0.45 0.0 0.5 3.14154 0.0 3.14154");
-    this->declare_parameter("velocity(command)", "0.1");
+    this->declare_parameter("velocity", 0.1);
     this->declare_parameter("desired_force_z", -5.0);
 
     this->declare_parameter("first_time", 10.0);
@@ -351,8 +351,8 @@ void Rokae_Move::publish_realtime_pose(const std::array<double, 6>& current_pose
 }
 
 
-void Rokae_Move::publish_realtime_pose_JointTau(const std::array<double, 6>& current_pose, 
-                        const std::array<double, 7>& current_tau_m) 
+void Rokae_Move::publish_realtime_pose_extFTau(const std::array<double, 6>& current_pose, 
+                        const std::array<double, 6>& current_ext_tau) 
 {
     std_msgs::msg::Float32MultiArray msg;
     // 将当前位姿和目标位姿打包到一起发布
@@ -361,13 +361,12 @@ void Rokae_Move::publish_realtime_pose_JointTau(const std::array<double, 6>& cur
         static_cast<float>(current_pose[0]),
         static_cast<float>(current_pose[1]),
         static_cast<float>(current_pose[2]),
-        static_cast<float>(current_tau_m[0]),
-        static_cast<float>(current_tau_m[1]),
-        static_cast<float>(current_tau_m[2]),
-        static_cast<float>(current_tau_m[3]),
-        static_cast<float>(current_tau_m[4]),
-        static_cast<float>(current_tau_m[5]),
-        static_cast<float>(current_tau_m[6]),
+        static_cast<float>(current_ext_tau[0]),
+        static_cast<float>(current_ext_tau[1]),
+        static_cast<float>(current_ext_tau[2]),
+        static_cast<float>(current_ext_tau[3]),
+        static_cast<float>(current_ext_tau[4]),
+        static_cast<float>(current_ext_tau[5])
     };
     realtime_pose_publisher_->publish(msg);
 }
@@ -459,18 +458,18 @@ void Rokae_Move::publish_initial_ext_FandTau(){
     }
 }
 
-
+// TODO 将位姿与外部力一起初始发布
 /**
  * @brief 初始位姿与关节力矩发布。用于：让plotjuggler读取到初始位资，不然只有在callback运行时才会读取到。
  */
-void Rokae_Move::publish_initial_pose_JointTau(){
+void Rokae_Move::publish_initial_pose_extFTau(){
     try{
         // 获取当前位姿
         std::array<double, 6> current_pose = robot->posture(rokae::CoordinateType::flangeInBase, ec);
-        std::array<double, 7> current_joint_torque = robot->jointTorque(ec);
+        // std::array<double, 6> current_joint_torque = robot->jointTorque(ec);
 
         // 发布当前位姿(目标位姿设置为当前位姿)
-        publish_realtime_pose_JointTau(current_pose, current_joint_torque);
+        publish_realtime_pose_extFTau(current_pose, current_pose);
     }catch (const std::exception &e) {
         RCLCPP_WARN(this->get_logger(), "Error publish_initial_pose_JointTau: %s", e.what());
     }

@@ -582,7 +582,7 @@ void RobotController::usr_rt_cartesian_v_control(
                             latest_current_ext_tau_base_ = current_ext_tau_base;
                             latest_current_ext_tau_stiff_ = current_ext_tau_stiff;
     
-                            node_->publish_realtime_ext_FandTau(latest_current_ext_tau_base_);
+                            node_->publish_realtime_pose_extFTau(latest_current_pose_, latest_current_ext_tau_base_);
                         }
     
                         index++;

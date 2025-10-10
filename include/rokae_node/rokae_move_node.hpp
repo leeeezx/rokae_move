@@ -30,7 +30,7 @@ public:
     
     // ================================================= 包含发布者的函数 =================================================
     void publish_realtime_pose(const std::array<double, 6>& current_pose, const std::array<double, 6>& target_pose);
-    void publish_realtime_pose_JointTau(const std::array<double, 6>& current_pose, const std::array<double, 7>& current_tau_m);
+    void publish_realtime_pose_extFTau(const std::array<double, 6>& current_pose, const std::array<double, 6>& current_tau_m);
     void publish_realtime_ext_FandTau(const std::array<double, 6>& current_ext_tau);
     
     
@@ -61,7 +61,7 @@ private:
     
     // ======================================== 定时器调用的发布函数 ========================================
     void publish_initial_pose();
-    void publish_initial_pose_JointTau();
+    void publish_initial_pose_extFTau();
     void publish_initial_ext_FandTau();
     
     // ======================================== 辅助函数 ========================================
@@ -89,7 +89,7 @@ private:
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr keyborad;
     
     std::string cartesian_points_string;
-    std::string velocity;
+    // std::string velocity;
     std::atomic<double> latest_force_z_{0.0}; // 最新的Z轴力值，原子变量以确保线程安全
     
     std::array<double, 6UL> points_array;

@@ -36,7 +36,7 @@ Rokae_Move::Rokae_Move(std::string name) : Node(name)
  * @brief 析构函数，关闭节点时进行清理工作。即按下ctrl+c后会执行的操作。
  */
 Rokae_Move::~Rokae_Move()
-{
+{   
     // 一些关闭操作
     robot->setMotionControlMode(rokae::MotionControlMode::NrtCommand, ec);
     robot->setOperateMode(rokae::OperateMode::manual, ec);
@@ -167,6 +167,10 @@ void Rokae_Move::initialize_robot()
 
         // 机械臂初始化设置
         robot->setRtNetworkTolerance(50, ec); // 网络延迟。若程序运行时控制器已经是实时模式，需要先切换到非实时模式后再更改网络延迟阈值，否则不生效
+
+        auto robotinfo = robot->robotInfo(ec);
+        RCLCPP_INFO(this->get_logger(), "控制器版本号:%s,机型:%s", robotinfo.version.c_str(), robotinfo.type.c_str());
+        RCLCPP_INFO(this->get_logger(), "xCore-SDK 版本: %s", robot->sdkVersion().c_str());
         
         robot->setOperateMode(rokae::OperateMode::automatic, ec); // 操作模式。自动
         robot->setMotionControlMode(MotionControlMode::RtCommand, ec); // 控制模式：实时模式
@@ -178,6 +182,7 @@ void Rokae_Move::initialize_robot()
         // 获取robot中的实时运动控制器对象getRtMotionController()，通过lock()将其转化为强指针并赋值给rtCon
         rtCon = robot->getRtMotionController().lock(); 
         RCLCPP_INFO(this->get_logger(), "---机器人初始化完成---");
+
     }
     catch (const std::exception &e)
     {

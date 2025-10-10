@@ -46,45 +46,45 @@ void RobotController::ForceController::reset() {
     force_error = 0.0;
 }
 
-/**
- * @brief 启动拖拽模式
- */
-void RobotController::move_enableDrag()
-{
-    try
-    {
-        robot_->enableDrag(DragParameter::cartesianSpace, DragParameter::freely, ec_);
-        RCLCPP_INFO(node_->get_logger(), "---拖拽模式已启动，按下末端侧边pilot以拖动 ！---.");
-    }
-    catch (const std::exception &e)
-    {
-        std::cerr << e.what() << '\n';
-    }
-}
+// /**
+//  * @brief 启动拖拽模式
+//  */
+// void RobotController::move_enableDrag()
+// {
+//     try
+//     {
+//         robot_->enableDrag(DragParameter::cartesianSpace, DragParameter::freely, ec_);
+//         RCLCPP_INFO(node_->get_logger(), "---拖拽模式已启动，按下末端侧边pilot以拖动 ！---.");
+//     }
+//     catch (const std::exception &e)
+//     {
+//         std::cerr << e.what() << '\n';
+//     }
+// }
 
-/**
- * @brief 停止拖拽模式
- */
-void RobotController::move_disableDrag()
-{
-    try
-    {
-        print(std::cout, "当前位置:", robot_->posture(rokae::CoordinateType::flangeInBase, ec_));
-        robot_->disableDrag(ec_); // 停止拖拽模式
-        // 重新设置机器人模式，并上电
-        robot_->setOperateMode(rokae::OperateMode::automatic, ec_);
-        // 若程序运行时控制器已经是实时模式，需要先切换到非实时模式后再更改网络延迟阈值，否则不生效
-        robot_->setRtNetworkTolerance(20, ec_);
-        robot_->setMotionControlMode(MotionControlMode::RtCommand, ec_); // 实时模式
-        robot_->setPowerState(true, ec_);
+// /**
+//  * @brief 停止拖拽模式
+//  */
+// void RobotController::move_disableDrag()
+// {
+//     try
+//     {
+//         print(std::cout, "当前位置:", robot_->posture(rokae::CoordinateType::flangeInBase, ec_));
+//         robot_->disableDrag(ec_); // 停止拖拽模式
+//         // 重新设置机器人模式，并上电
+//         robot_->setOperateMode(rokae::OperateMode::automatic, ec_);
+//         // 若程序运行时控制器已经是实时模式，需要先切换到非实时模式后再更改网络延迟阈值，否则不生效
+//         robot_->setRtNetworkTolerance(20, ec_);
+//         robot_->setMotionControlMode(MotionControlMode::RtCommand, ec_); // 实时模式
+//         robot_->setPowerState(true, ec_);
 
-        RCLCPP_ERROR(node_->get_logger(), "---拖拽模式已关闭。当前为自动-实时模式，上电状态 !---.");
-    }
-    catch (const std::exception &e)
-    {
-        std::cerr << e.what() << '\n';
-    }
-}
+//         RCLCPP_ERROR(node_->get_logger(), "---拖拽模式已关闭。当前为自动-实时模式，上电状态 !---.");
+//     }
+//     catch (const std::exception &e)
+//     {
+//         std::cerr << e.what() << '\n';
+//     }
+// }
 
 /** 
  * @brief 使用控制command进行轨迹控制。运动指令使用有更多扩展性，详见官方C++ api文档。
@@ -422,8 +422,6 @@ void RobotController::usr_rt_cartesian_v_control(
     double y_target_speed, int y_direction)
     {
         try {
-            // const double FORCE_THRESHOLD = 2.0; // 力触发阈值，单位：kg
-
             // 参数校验，传入的距离和速度必须大于等于0
             const double EPSILON = 1e-10;
             if(z_air_dist <= EPSILON || z_cruise_dist <= EPSILON || z_decel_dist <= EPSILON || z_target_speed <= EPSILON) {
@@ -432,7 +430,6 @@ void RobotController::usr_rt_cartesian_v_control(
             }
 
             // ============ 重置状态变量 ============
-            force_trigger_.store(false);  // 重置力触发标志
             trajectory_state_.store(TrajectoryState::INITIAL_TRAJECTORY);  // 重置轨迹状态
 
             // 停止定时器发布
@@ -484,27 +481,21 @@ void RobotController::usr_rt_cartesian_v_control(
             std::array<double, 16> tra2_start_pose_m; //轨迹2的实时起点，array16D行优先矩阵
             bool tra2_init = false; // 轨迹2的起点初始化标志.默认为false，如果初始化成功则为true
 
-            const double total_lift = 0.1; // 轨迹2的上升总距离
-            const double lift_duration_time = 5.0; // 轨迹2的上升持续时间
+            const double total_lift = 0.05; // 轨迹2的上升总距离
+            const double lift_duration_time = 10.0; // 轨迹2的上升持续时间
 
-            int callback_count = 0;
-            const int trigger_count = 15000; // 假设1ms周期,5000次 = 5秒
-            bool time_triggered = false; // 防止重复触发
+            // 时间触发。备用
+            // int callback_count = 0;
+            // const int trigger_count = 15000; // 假设1ms周期,5000次 = 5秒
+            // bool time_triggered = false; // 防止重复触发
+
+            const double FORCE_THRESHOLD = 10.0; // 力触发阈值，单位：N
 
             // ------------------------------------------------机械臂控制循环回调函数--------------------------------------------------------
             std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
                 CartesianPosition output{}; // CartesianPosition output{}是给output进行类型定义
                 
-                // RCLCPP_INFO(node_->get_logger(), "进入回调函数1");
-
-                // 检测：力阈值。当当前力大于设定阈值且当前轨迹为初始轨迹时，设置力触发标志为真
-                // if (current_z_force > FORCE_THRESHOLD && trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY){
-                //     // 只有在第一次触发时才打印日志，避免刷屏
-                //     if (!force_trigger_.load()) {
-                //         RCLCPP_INFO(node_->get_logger(), "力阈值触发！当前力: %.2f N, 阈值: %.2f N", current_z_force, FORCE_THRESHOLD);
-                //         force_trigger_.store(true); // 设置触发标志
-                //     }
-                // }
+                robot_->getStateData(RtSupportedFields::tauExt_inBase, latest_current_ext_tau_base_);
                 
                 // 时间触发检测。测试有效，但是触发后切换较慢。保留作参考/备用
                 // callback_count++;
@@ -514,16 +505,22 @@ void RobotController::usr_rt_cartesian_v_control(
                 //     RCLCPP_INFO(node_->get_logger(), "计时器触发: %d次回调", callback_count);
                 // }
                 // RCLCPP_INFO(node_->get_logger(), "计时器检测完毕2");
+                
 
                 // 检测：力阈值触发标志 与 轨迹状态。当力触发状态为真且当前轨迹为初始轨迹时，
-                if (force_trigger_.load() && trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY){ 
+                if (latest_current_ext_tau_base_[2] > FORCE_THRESHOLD && trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY){ 
                     RCLCPP_INFO(node_->get_logger(), "======================达到力阈值，触发轨迹切换请求,运行新轨迹======================");
+                    
                     trajectory_state_.store(TrajectoryState::TRAJECTORY_2); // 切换轨迹状态为轨迹2
 
-                    // time = 0.0;  // 重置时间。保留参考/备用
-                    RCLCPP_INFO(node_->get_logger(), 
-                            "轨迹2起点: [%.3f, %.3f, %.3f]",
-                            tra2_start_pose[0], tra2_start_pose[1], tra2_start_pose[2]);
+                    if (robot_->getStateData(RtSupportedFields::tcpPoseAbc_m, tra2_start_pose) == 0 &&
+                        robot_->getStateData(RtSupportedFields::tcpPose_m, tra2_start_pose_m) == 0) {
+                        tra2_init = true; // 标志位置为true，表示轨迹2起点已初始化
+                        time = 0.0;  // 重置时间
+                        RCLCPP_INFO(node_->get_logger(), 
+                                "轨迹2起点: [%.3f, %.3f, %.3f]",
+                                tra2_start_pose[0], tra2_start_pose[1], tra2_start_pose[2]);
+                    } 
                     
                 }
 
@@ -539,33 +536,36 @@ void RobotController::usr_rt_cartesian_v_control(
                         std::array<double, 6> current_ext_tau_base;
                         std::array<double, 6> current_ext_tau_stiff;
                         if(robot_->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0 &&
-                           robot_->getStateData(RtSupportedFields::tau_m, current_tau_m) == 0 &&
-                           robot_->getStateData(RtSupportedFields::tauExt_inBase, current_ext_tau_base) == 0 &&
-                           robot_->getStateData(RtSupportedFields::tauExt_inStiff, current_ext_tau_stiff) == 0) {
+                            robot_->getStateData(RtSupportedFields::tau_m, current_tau_m) == 0 &&
+                            robot_->getStateData(RtSupportedFields::tauExt_inBase, current_ext_tau_base) == 0 &&
+                            robot_->getStateData(RtSupportedFields::tauExt_inStiff, current_ext_tau_stiff) == 0) {
                             // 更新最新位姿数据
+                            std::lock_guard<std::mutex> lock(pose_data_mutex_);
                             latest_current_pose_ = current_pose; // 机械臂末端实际位姿
-                            latest_target_pose_ = target_pose; // 机械臂末端目标位姿。本地计算轨迹，非控制器计算轨迹。如需控制器计算轨迹，另调用tcpPose_c？不确定
+                            // latest_target_pose_ = target_pose; // 机械臂末端目标位姿。本地计算轨迹(需要放置在上方轨迹赋值内部)，非控制器计算轨迹。如需控制器计算轨迹，另调用tcpPose_c？不确定
 
                             latest_current_tau_m_ = current_tau_m; // 关节力矩
 
                             latest_current_ext_tau_base_ = current_ext_tau_base; // 机械臂基坐标系中外部力-力矩
                             latest_current_ext_tau_stiff_ = current_ext_tau_stiff; // 机械臂基坐标系中外部力-力矩
-    
+
                             node_->publish_realtime_pose_extFTau(latest_current_pose_, latest_current_ext_tau_base_);
                         }
-    
+
                         index++;
                     } else {
                         output.setFinished();
                         stopManually.store(false);
                     }
-
                 }else{
                     // ================================== 轨迹2 ==================================
                     // TODO 发布位姿数据。
-                    // 获取切换时刻的当前位置作为轨迹2起点
-                    robot_->getStateData(RtSupportedFields::tcpPoseAbc_m, tra2_start_pose);
-                    robot_->getStateData(RtSupportedFields::tcpPose_m, tra2_start_pose_m); 
+                    if (!tra2_init) {
+                    RCLCPP_ERROR(node_->get_logger(), "轨迹2未初始化!");
+                    output.setFinished();
+                    stopManually.store(false);
+                    return output;
+                    } 
 
                     // 轨迹2方案：直线上升一段距离
                     if (time < lift_duration_time){
@@ -584,7 +584,7 @@ void RobotController::usr_rt_cartesian_v_control(
                         stopManually.store(false);
                     }
                 }
-                
+
                 return output;
             };
 
@@ -840,6 +840,52 @@ void RobotController::usr_rt_stationary_control(double hold_duration = 20)
         rtCon_->stopMove();
         RCLCPP_ERROR(node_->get_logger(), "实时静止控制错误: %s", e.what());
     }
+}
+
+
+void RobotController::move_enableDrag(){
+    error_code ec;
+    robot_->setOperateMode(rokae::OperateMode::manual, ec);
+    if(ec) {
+        RCLCPP_ERROR(node_->get_logger(), "切换手动模式失败: %s", ec.message().c_str());
+        return;
+    }
+    robot_->setPowerState(false, ec);
+    if(ec) {
+        RCLCPP_ERROR(node_->get_logger(), "下电失败: %s", ec.message().c_str());
+        return;
+    }
+    RCLCPP_INFO(node_->get_logger(), "等待切换拖拽模式...");
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+
+    robot_->enableDrag(DragParameter::cartesianSpace, DragParameter::freely, ec);
+    if(ec) {
+        RCLCPP_ERROR(node_->get_logger(), "启用拖拽失败: %s", ec.message().c_str());
+        return;
+    }
+
+    RCLCPP_INFO(node_->get_logger(), "拖拽模式已启用");
+}
+
+
+void RobotController::move_disableDrag() {
+    error_code ec;
+    
+    // 1. 关闭拖拽
+    robot_->disableDrag(ec);
+    if(ec) {
+        RCLCPP_ERROR(node_->get_logger(), "关闭拖拽失败: %s", ec.message().c_str());
+        return;
+    }
+    
+    // 2. 等待模式切换
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    
+    // 3. 恢复到自动模式并上电
+    robot_->setOperateMode(rokae::OperateMode::automatic, ec);
+    robot_->setPowerState(true, ec);
+    
+    RCLCPP_INFO(node_->get_logger(), "拖拽模式已关闭，恢复到自动模式");
 }
 
 

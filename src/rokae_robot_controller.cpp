@@ -370,7 +370,7 @@ void RobotController::usr_rt_cartesian_control(double first_time, double second_
                         latest_current_pose_ = current_pose;
                         latest_target_pose_ = target_pose;
 
-                        node_->publish_realtime_pose(latest_current_pose_, latest_target_pose_);
+                        node_->publish_realtime_poseAndTargetPose(latest_current_pose_, latest_target_pose_);
                     }
 
                     index++;
@@ -434,7 +434,8 @@ void RobotController::usr_rt_cartesian_v_control(
 
             // 停止定时器发布
             node_->pose_timer_->cancel();
-            node_->FandTau_timer_->cancel();
+            node_->extTau_timer_->cancel();
+            node_->poseAndextTau_timer_->cancel();
 
             // 设置需要接收的机器人状态数据
             std::vector<std::string> fields = {RtSupportedFields::tcpPoseAbc_m, 
@@ -549,7 +550,7 @@ void RobotController::usr_rt_cartesian_v_control(
                             latest_current_ext_tau_base_ = current_ext_tau_base; // 机械臂基坐标系中外部力-力矩
                             latest_current_ext_tau_stiff_ = current_ext_tau_stiff; // 机械臂基坐标系中外部力-力矩
 
-                            node_->publish_realtime_pose_extFTau(latest_current_pose_, latest_current_ext_tau_base_);
+                            node_->publish_realtime_poseAndextTau(latest_current_pose_, latest_current_ext_tau_base_);
                         }
 
                         index++;
@@ -602,7 +603,8 @@ void RobotController::usr_rt_cartesian_v_control(
             rtCon_->stopMove();
             robot_->stopReceiveRobotState(); // 停止接收机器人状态数据
             node_->pose_timer_->reset();
-            node_->FandTau_timer_->reset();
+            node_->extTau_timer_->reset();
+            node_->poseAndextTau_timer_->reset();
             RCLCPP_INFO(node_->get_logger(), "实时轨迹控制完成");
             // ============ 退出时再次重置状态 ============
             force_trigger_.store(false);
@@ -610,7 +612,8 @@ void RobotController::usr_rt_cartesian_v_control(
 
         } catch (const std::exception &e) {
             node_->pose_timer_->reset();
-            node_->FandTau_timer_->reset();
+            node_->extTau_timer_->reset();
+            node_->poseAndextTau_timer_->reset();
             robot_->stopReceiveRobotState(); // 确保停止接收数据
             rtCon_->stopLoop();
             rtCon_->stopMove();
@@ -711,7 +714,7 @@ void RobotController::usr_rt_vertical_diagonal_control(
                             std::lock_guard<std::mutex> lock(pose_data_mutex_);
                             latest_current_pose_ = current_pose;
                             latest_target_pose_ = target_pose;
-                            node_->publish_realtime_pose(latest_current_pose_, latest_target_pose_);
+                            node_->publish_realtime_poseAndTargetPose(latest_current_pose_, latest_target_pose_);
                         }
                     }
 
@@ -764,7 +767,8 @@ void RobotController::usr_rt_stationary_control(double hold_duration = 20)
 
         // 停止初始位姿发布
         node_->pose_timer_->cancel();
-        node_->FandTau_timer_->cancel();
+        node_->extTau_timer_->cancel();
+        node_->poseAndextTau_timer_->cancel();
 
         // 设置需要接收的机器人状态数据
         std::vector<std::string> fields = {RtSupportedFields::tcpPoseAbc_m,
@@ -802,7 +806,7 @@ void RobotController::usr_rt_stationary_control(double hold_duration = 20)
                     latest_current_pose_ = current_pose;
                     latest_current_ext_tau_base_ = current_ext_tau_base;
                     // latest_target_pose_ = hold_pose;
-                    node_->publish_realtime_ext_FandTau(latest_current_ext_tau_base_);
+                    node_->publish_realtime_extTau(latest_current_ext_tau_base_);
                 }
 
                 elapsed_time += dt;
@@ -829,12 +833,14 @@ void RobotController::usr_rt_stationary_control(double hold_duration = 20)
         rtCon_->stopMove();
         robot_->stopReceiveRobotState();
         node_->pose_timer_->reset();
-        node_->FandTau_timer_->reset();
+        node_->extTau_timer_->reset();
+        node_->poseAndextTau_timer_->reset();
         RCLCPP_INFO(node_->get_logger(), "实时静止控制完成\n-------------------------------");
 
     } catch (const std::exception &e) {
         node_->pose_timer_->reset();
-        node_->FandTau_timer_->reset();
+        node_->extTau_timer_->reset();
+        node_->poseAndextTau_timer_->reset();
         robot_->stopReceiveRobotState();
         rtCon_->stopLoop();
         rtCon_->stopMove();

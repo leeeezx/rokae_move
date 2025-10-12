@@ -8,6 +8,7 @@
 #include "std_msgs/msg/float32_multi_array.hpp"
 #include "std_msgs/msg/float32.hpp"
 #include "geometry_msgs/msg/wrench_stamped.hpp" 
+#include "geometry_msgs/msg/pose_stamped.hpp"
 // 珞石机械臂需要的库
 #include <memory>
 #include <mutex>
@@ -29,14 +30,20 @@ public:
     ~Rokae_Move(); // 析构函数
     
     // ================================================= 包含发布者的函数 =================================================
-    void publish_realtime_pose(const std::array<double, 6>& current_pose, const std::array<double, 6>& target_pose);
-    void publish_realtime_pose_extFTau(const std::array<double, 6>& current_pose, const std::array<double, 6>& current_tau_m);
-    void publish_realtime_ext_FandTau(const std::array<double, 6>& current_ext_tau);
+    // Note:名词定义
+    // pose——末端位姿，包含位置和姿态，一般用6维向量表示；
+    // extTau——末端外部力-力矩，一般用6维向量表示，前三维是力，后三维是力矩（机械臂自己算的）；
+    // TargetPose——目标位姿，一般用6维向量表示(是计算的trajectory的数据)；
+    void publish_realtime_pose(const std::array<double, 6>& current_pose); // 发布实时位姿
+    void publish_realtime_extTau(const std::array<double, 6>& current_extTau); // 发布实时末端力-力矩
+    void publish_realtime_poseAndTargetPose(const std::array<double, 6>& current_pose, const std::array<double, 6>& target_pose); // 发布实时位姿和目标位姿
+    void publish_realtime_poseAndextTau(const std::array<double, 6>& current_pose, const std::array<double, 6>& current_extTau); // 发布实时位姿和力-力矩
     
     
     //  定时器 
     rclcpp::TimerBase::SharedPtr pose_timer_;
-    rclcpp::TimerBase::SharedPtr FandTau_timer_;
+    rclcpp::TimerBase::SharedPtr extTau_timer_;
+    rclcpp::TimerBase::SharedPtr poseAndextTau_timer_;
 
     rclcpp::TimerBase::SharedPtr force_trigger_timer_;
 
@@ -61,30 +68,31 @@ private:
     
     // ======================================== 定时器调用的发布函数 ========================================
     void publish_initial_pose();
-    void publish_initial_pose_extFTau();
-    void publish_initial_ext_FandTau();
+    void publish_initial_poseAndextTau();
+    void publish_initial_extTau();
     
     // ======================================== 辅助函数 ========================================
     std::array<double, 6UL> string_to_array(const std::string &str);
     
 
-    // =============================================================================================================
     // ======================================================= 成员变量 =============================================
-    // =============================================================================================================
     std::shared_ptr<rokae::xMateErProRobot> robot; // 机械臂对象
     std::shared_ptr<rokae::RtMotionControlCobot<7U>> rtCon; // 机械臂实时运动控制对象
     std::error_code ec; // 错误码ec
 
-    // --- 我们的机器人控制器 ---
+    // --- 机器人控制器 ---
     std::unique_ptr<RobotController> robot_controller_;
 
     // ====================================== ROS通信 ======================================
     // 发布者 
     // 机械臂信息
     rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr realtime_pose_publisher_;
-    // rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr realtime_FandTau_publisher_;
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr realtime_extTau_publisher_;
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr realtime_poseAndTargetPose_publisher_;
+    rclcpp::Publisher<std_msgs::msg::Float32MultiArray>::SharedPtr realtime_poseAndextTau_publisher_;
     
-    rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr realtime_FandTau_publisher_; // 加了Stamped
+    // rclcpp::Publisher<geometry_msgs::msg::WrenchStamped>::SharedPtr realtime_extTau_publisher_; // 加了Stamped
+    // rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr realtime_pose_publisher_; // 加了Stamped
 
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr keyborad;
     

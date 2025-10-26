@@ -483,7 +483,7 @@ void RobotController::usr_rt_cartesian_v_control(
             bool tra2_init = false; // 轨迹2的起点初始化标志.默认为false，如果初始化成功则为true
 
             const double total_lift = 0.05; // 轨迹2的上升总距离
-            const double lift_duration_time = 10.0; // 轨迹2的上升持续时间
+            const double lift_duration_time = 5.0; // 轨迹2的上升持续时间
 
             // 时间触发。备用
             // int callback_count = 0;
@@ -514,15 +514,23 @@ void RobotController::usr_rt_cartesian_v_control(
                     
                     trajectory_state_.store(TrajectoryState::TRAJECTORY_2); // 切换轨迹状态为轨迹2
 
-                    if (robot_->getStateData(RtSupportedFields::tcpPoseAbc_m, tra2_start_pose) == 0 &&
-                        robot_->getStateData(RtSupportedFields::tcpPose_m, tra2_start_pose_m) == 0) {
-                        tra2_init = true; // 标志位置为true，表示轨迹2起点已初始化
-                        time = 0.0;  // 重置时间
+                    if (index > 0 && index < trajectory.size()) {
+                        // ！！！ 使用上一个周期的目标点作为起点，确保连续性 ！！！
+                        tra2_start_pose = trajectory[index - 1]; 
+                        Utils::postureToTransArray(tra2_start_pose, tra2_start_pose_m); // 需要一个将array6d转为array16d的工具函数
+                        tra2_init = true; 
+                        time = 0.0;
                         RCLCPP_INFO(node_->get_logger(), 
-                                "轨迹2起点: [%.3f, %.3f, %.3f]",
+                                "轨迹2起点 (从轨迹1继承): [%.3f, %.3f, %.3f]",
+                                index - 1,
                                 tra2_start_pose[0], tra2_start_pose[1], tra2_start_pose[2]);
-                    } 
-                    
+                    } else {
+                        // 如果索引无效，则切换失败
+                        tra2_init = false;
+                        RCLCPP_ERROR(node_->get_logger(), "无效的轨迹索引，无法切换轨迹！");
+                        output.setFinished();
+                        stopManually.store(false);
+                    }
                 }
 
                 if (trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY) {
@@ -559,17 +567,17 @@ void RobotController::usr_rt_cartesian_v_control(
                         stopManually.store(false);
                     }
                 }else{
-                    // ================================== 轨迹2 ==================================
-                    // TODO 发布位姿数据。
-                    if (!tra2_init) {
-                    RCLCPP_ERROR(node_->get_logger(), "轨迹2未初始化!");
-                    output.setFinished();
-                    stopManually.store(false);
-                    return output;
-                    } 
-
-                    // 轨迹2方案：直线上升一段距离
-                    if (time < lift_duration_time){
+                    try{
+                        // ================================== 轨迹2 ==================================
+                        // TODO 发布位姿数据。
+                        if (!tra2_init) {
+                        RCLCPP_ERROR(node_->get_logger(), "轨迹2未初始化!");
+                        output.setFinished();
+                        stopManually.store(false);
+                        return output;
+                        } 
+    
+                        // 轨迹2方案：直线上升一段距离
                         double t_norm = time / lift_duration_time;  // 归一化 [0,1]
                         
                         // 余弦函数轨迹。此处表上升
@@ -580,9 +588,18 @@ void RobotController::usr_rt_cartesian_v_control(
                         output.pos[11] += delta_z; // 直接修改16d矩阵的11位（第四列第三行）
 
                         time += 0.001;
-                    }else{
+
+                        if(time > lift_duration_time){
+                            RCLCPP_INFO(node_->get_logger(), "轨迹2超时结束");
+                            output.setFinished();
+                            stopManually.store(false);
+                        }
+
+                    }catch(const std::exception& e) {
+                        RCLCPP_ERROR(node_->get_logger(), "轨迹2执行错误: %s", e.what());
                         output.setFinished();
                         stopManually.store(false);
+                        return output;
                     }
                 }
 

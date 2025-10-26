@@ -482,15 +482,15 @@ void RobotController::usr_rt_cartesian_v_control(
             std::array<double, 16> tra2_start_pose_m; //轨迹2的实时起点，array16D行优先矩阵
             bool tra2_init = false; // 轨迹2的起点初始化标志.默认为false，如果初始化成功则为true
 
-            const double total_lift = 0.05; // 轨迹2的上升总距离
-            const double lift_duration_time = 5.0; // 轨迹2的上升持续时间
+            const double total_lift = 0.10; // 轨迹2的上升总距离
+            const double lift_duration_time = 10.0; // 轨迹2的上升持续时间
 
             // 时间触发。备用
             // int callback_count = 0;
             // const int trigger_count = 15000; // 假设1ms周期,5000次 = 5秒
             // bool time_triggered = false; // 防止重复触发
 
-            const double FORCE_THRESHOLD = 10.0; // 力触发阈值，单位：N
+            const double FORCE_THRESHOLD = 0.0; // 力触发阈值，单位：N
 
             // ------------------------------------------------机械臂控制循环回调函数--------------------------------------------------------
             std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
@@ -586,6 +586,28 @@ void RobotController::usr_rt_cartesian_v_control(
                         // Utils::postureToTransArray(tra2_start_pose, output.pos);
                         output.pos = tra2_start_pose_m;
                         output.pos[11] += delta_z; // 直接修改16d矩阵的11位（第四列第三行）
+
+                        // 获取实时位姿
+                        std::array<double, 6> current_pose;
+                        std::array<double, 7> current_tau_m;
+                        std::array<double, 6> current_ext_tau_base;
+                        std::array<double, 6> current_ext_tau_stiff;
+                        if(robot_->getStateData(RtSupportedFields::tcpPoseAbc_m, current_pose) == 0 &&
+                            robot_->getStateData(RtSupportedFields::tau_m, current_tau_m) == 0 &&
+                            robot_->getStateData(RtSupportedFields::tauExt_inBase, current_ext_tau_base) == 0 &&
+                            robot_->getStateData(RtSupportedFields::tauExt_inStiff, current_ext_tau_stiff) == 0) {
+                            // 更新最新位姿数据
+                            std::lock_guard<std::mutex> lock(pose_data_mutex_);
+                            latest_current_pose_ = current_pose; // 机械臂末端实际位姿
+                            // latest_target_pose_ = target_pose; // 机械臂末端目标位姿。本地计算轨迹(需要放置在上方轨迹赋值内部)，非控制器计算轨迹。如需控制器计算轨迹，另调用tcpPose_c？不确定
+
+                            latest_current_tau_m_ = current_tau_m; // 关节力矩
+
+                            latest_current_ext_tau_base_ = current_ext_tau_base; // 机械臂基坐标系中外部力-力矩
+                            latest_current_ext_tau_stiff_ = current_ext_tau_stiff; // 机械臂基坐标系中外部力-力矩
+
+                            node_->publish_realtime_poseAndextTau(latest_current_pose_, latest_current_ext_tau_base_);
+                        }
 
                         time += 0.001;
 

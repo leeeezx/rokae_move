@@ -38,8 +38,17 @@ Rokae_Move::Rokae_Move(std::string name) : Node(name)
 Rokae_Move::~Rokae_Move()
 {   
     // 一些关闭操作
-    robot->setMotionControlMode(rokae::MotionControlMode::NrtCommand, ec);
-    robot->setOperateMode(rokae::OperateMode::manual, ec);
+    // robot->setMotionControlMode(rokae::MotionControlMode::NrtCommand, ec);
+    // robot->setOperateMode(rokae::OperateMode::manual, ec);
+
+    // std::array<double, 16> reset_Coor = {
+    //         1, 0, 0, 0, 
+    //         0, 1, 0, 0, 
+    //         0, 0, 1, 0, 
+    //         0, 0, 0, 1
+    //     };
+    // rtCon->setFcCoor(reset_Coor, FrameType::tool, ec);
+    // RCLCPP_INFO(this->get_logger(), "力控坐标系已重置");
     robot->setPowerState(false, ec);
     RCLCPP_INFO(this->get_logger(), "---珞石机械臂运动节点已关闭---.");
 }
@@ -90,8 +99,8 @@ void Rokae_Move::setup_ros_communications()
     this->declare_parameter("target_speed", 0.01,
         floatDesc("期望侵入速度（米/秒）", 0.01, 2.5, 0.01));   //期望侵入速度
 
-    // 添加Y轴参数
-    this->declare_parameter("y_air_distance", 0.04, 
+    // 添加Y轴参数。同时用于单独的Y轴运动控制，和对角线运动控制
+    this->declare_parameter("y_air_distance", 0.01, 
         floatDesc("Y轴加速段距离（米）", 0.01, 1.0, 0.001));     //Y轴加速段距离
     this->declare_parameter("y_cruise_distance", 0.05,
         floatDesc("Y轴匀速段距离（米）", 0.01, 1.0, 0.001));     //Y轴匀速段距离
@@ -182,6 +191,7 @@ void Rokae_Move::initialize_robot()
         RCLCPP_INFO(this->get_logger(), "xCore-SDK 版本: %s", robot->sdkVersion().c_str());
         
         robot->setOperateMode(rokae::OperateMode::automatic, ec); // 操作模式。自动
+        RCLCPP_INFO(this->get_logger(), "操作模式设置完毕");
         robot->setMotionControlMode(MotionControlMode::RtCommand, ec); // 控制模式：实时模式
 
         robot->setPowerState(true, ec); // 上电
@@ -191,6 +201,16 @@ void Rokae_Move::initialize_robot()
         // 获取robot中的实时运动控制器对象getRtMotionController()，通过lock()将其转化为强指针并赋值给rtCon
         rtCon = robot->getRtMotionController().lock(); 
         RCLCPP_INFO(this->get_logger(), "---机器人初始化完成---");
+
+        // std::array<double, 16> reset_Coor = {
+        //     1, 0, 0, 0, 
+        //     0, -1, 0, 0, 
+        //     0, 0, -1, 0, 
+        //     0, 0, 0, 1
+        // };
+        // rtCon->setFcCoor(reset_Coor, FrameType::world, ec);
+
+        // RCLCPP_INFO(this->get_logger(), "力控坐标系已重置");
 
     }
     catch (const std::exception &e)
@@ -253,9 +273,9 @@ void Rokae_Move::keyborad_callback(const std_msgs::msg::String::SharedPtr msg)
         }
         break;
     case 'w':
-        cout << "Misson  : Start cartesian impedance controller and press down 0.05m " << endl;
-        cout << "Waiting for 1 second and pushing back 0.3m" << endl;
-        robot_controller_->cartesian_impedance_control(desired_force, first_time, second_time);
+        robot_controller_->cartesian_impedance_control(diagonal_air_dist, diagonal_cruise_dist, diagonal_decel_dist, 
+                                                    diagonal_target_speed, 
+                                                    gamma_angle);
         break;
     case 'e':
         robot_controller_->move_enableDrag();
@@ -521,7 +541,7 @@ void Rokae_Move::publish_initial_poseAndextTau(){
         std::array<double, 3> cart_torque;                 // 笛卡尔空间力矩 [X, Y, Z]
         std::array<double, 3> cart_force;                  // 笛卡尔空间力 [X, Y, Z]
         robot->getEndTorque(
-            FrameType::flange,           // 或 FrameType::flange, FrameType::tool
+            FrameType::world,           // FrameType::world, FrameType::flange, FrameType::tool
             joint_torque_measured,      // 输出：各轴测量力
             external_torque_measured,   // 输出：各轴外部力
             cart_torque,                // 输出：笛卡尔空间力矩
@@ -534,9 +554,9 @@ void Rokae_Move::publish_initial_poseAndextTau(){
             return;
         }
         std::array<double, 6> combined_force_torque;
-        combined_force_torque[0] = -cart_force[0]; // 取反
+        combined_force_torque[0] = cart_force[0]; // 取反
         combined_force_torque[1] = cart_force[1]; 
-        combined_force_torque[2] = -cart_force[2]; // 取反
+        combined_force_torque[2] = cart_force[2]; // 取反
         combined_force_torque[3] = cart_torque[0];
         combined_force_torque[4] = cart_torque[1];
         combined_force_torque[5] = cart_torque[2];

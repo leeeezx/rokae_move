@@ -147,88 +147,136 @@ void RobotController::move_init()
 }
 
 
-// 目前未使用
 /** 
  * @brief 使用官方笛卡尔阻抗控制实现轨迹跟踪和恒力控制。测试时，需要先用较大的两段时间，以防出现碰撞等意外！！！
- * @param desired_force_z 期望的z方向力(用于阻抗控制)
- * @param first_time 第一段时间
- * @param second_time 第二段时间
+ * @param 
+ * 
+ * 
+ * 利用
  */
-void RobotController::cartesian_impedance_control(double desired_force_z, double first_time, double second_time)
+void RobotController::cartesian_impedance_control(
+    double air_dist, double cruise_dist, double decel_dist, double target_speed, double gamma_deg)
 {
     try {
-            // 获取当前位置
-            std::array<double, 6UL> start = robot_->posture(rokae::CoordinateType::flangeInBase, ec_);
-            print(std::cout, "Current position:", start);
+        // 参数校验，传入的距离和速度必须大于等于0
+        const double EPSILON = 1e-10;
+        if(air_dist <= EPSILON || cruise_dist <= EPSILON || decel_dist <= EPSILON || target_speed <= EPSILON || gamma_deg <= EPSILON) {
+            RCLCPP_ERROR(node_->get_logger(), "无效的传入参数，立即检查速度控制的传入参数!");
+            return;
+        }
 
-            // 定义三个路径点，实现先下压后平移的轨迹
-            std::array<double, 6> via_point = start; // 中间点(下压xxxm)
-            via_point[2] -= 0.190;
+        // 停止定时器发布
+        node_->pose_timer_->cancel();
+        node_->extTau_timer_->cancel();
+        node_->poseAndextTau_timer_->cancel();
 
-            std::array<double, 6> end = via_point;      // 终点(平移xxxm)
-            end[1] += 0.1;
+        // 设置需要接收的机器人状态数据
+        std::vector<std::string> fields = {RtSupportedFields::tcpPoseAbc_m, 
+                                            RtSupportedFields::tcpPose_m,
+                                            RtSupportedFields::tau_m,
+                                            RtSupportedFields::tauExt_inBase, //< 基坐标系中外部力矩 [Nm] - Array6D
+                                            RtSupportedFields::tauExt_inStiff,//< 力控坐标系中外部力矩 [Nm] - Array6D
+                                        }; 
+        robot_->startReceiveRobotState(std::chrono::milliseconds(1), fields); // 启动接收机器人数据。1ms采样周期
 
-            auto trajectory = TrajectoryGenerator::generateLinearSegmentPath(start, via_point, end, first_time, second_time);
+        // 获取当前位置
+        std::array<double, 6UL> start = robot_->posture(rokae::CoordinateType::flangeInBase, ec_);
+        print(std::cout, "当前位姿:", start);
 
-            // 设置力控坐标系为末端坐标系。需要根据实际加装的末端工具进行调整
-            // 相关数据记录：
-            // 1.双头螺栓+半球足，x、y一致，z长了0.199m。
-            // 2.双头螺栓+半圆柱足，x、y一致，z长了？？？m。
-            std::array<double, 16> toolToFlange = {
-                1, 0, 0, 0, 
-                0, 1, 0, 0, 
-                0, 0, 1, 0.199, 
-                0, 0, 0, 1
-            };
-            rtCon_->setFcCoor(toolToFlange, FrameType::tool, ec_);
+        std::vector<std::array<double, 6>> trajectory;
+        trajectory = TrajectoryGenerator::generateDiagonalPhasePath(
+            start,
+            air_dist, cruise_dist, decel_dist, target_speed, gamma_deg
+        ); // 速度方向需要测试。
+        RCLCPP_INFO(node_->get_logger(), "已生成轨迹，共%d个点", (int)trajectory.size());
 
-            // 设置笛卡尔阻抗参数。！最大值为 { 1500, 1500, 1500, 100, 100, 100 }, 单位: N/m, Nm/rad。
-            // XYZ方向：设置较低刚度以实现柔顺性
-            // 姿态方向：保持较高刚度以保持姿态
-            rtCon_->setCartesianImpedance({1500, 1500, 1500, 100, 100, 100}, ec_);
+        // 设置力控坐标系为末端坐标系。需要根据实际加装的末端工具进行调整
+        std::array<double, 16> toolToFlange = {
+            -1, 0, 0, 0, 
+            0, 1, 0, 0, 
+            0, 0, -1, 0, 
+            0, 0, 0, 1
+        };
+        rtCon_->setFcCoor(toolToFlange, FrameType::world, ec_);
+        RCLCPP_INFO(node_->get_logger(), "力控坐标系设置完成");
+
+        // 设置笛卡尔阻抗参数。最大值为 { 1500, 1500, 1500, 100, 100, 100 }, 单位: N/m, Nm/rad。
+        // XYZ方向：设置较低刚度以实现柔顺性
+        // 姿态方向：保持较高刚度以保持姿态
+        rtCon_->setCartesianImpedance({3000, 3000, 2995, 300, 300, 300 }, ec_);
+        RCLCPP_INFO(node_->get_logger(), "笛卡尔阻抗参数设置完毕");
+        
+        // 启动笛卡尔阻抗控制
+        rtCon_->startMove(RtControllerMode::cartesianImpedance);
+        RCLCPP_INFO(node_->get_logger(), "startMove成功");
+
+        std::atomic<bool> stopManually{true};
+        int index = 0;
+
+        // 控制循环回调函数
+        std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
+            CartesianPosition output{};
             
-            // 设置期望力
-            rtCon_->setCartesianImpedanceDesiredTorque({0, 0, desired_force_z, 0, 0, 0}, ec_);
-            
-            // 启动笛卡尔阻抗控制
-            rtCon_->startMove(RtControllerMode::cartesianImpedance);
+            if (index < int(trajectory.size())) {
+                // 获取当前规划点位
+                auto target_pose = trajectory[index];
+                Utils::postureToTransArray(target_pose, output.pos);
 
-            std::atomic<bool> stopManually{true};
-            int index = 0;
-
-            // 控制循环回调函数
-            std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
-                CartesianPosition output{};
-                
-                if (index < int(trajectory.size())) {
-                    // 获取当前规划点位
-                    auto target_pose = trajectory[index];
-                    Utils::postureToTransArray(target_pose, output.pos);
-                    index++;
-                    
-                } else {
-                    output.setFinished();
-                    stopManually.store(false);
-                }
-                
-                return output;
-            };
-
-            rtCon_->setControlLoop(callback);
-            rtCon_->startLoop(false);
-            
-            while(stopManually.load()) {
-                // node_->publish_force_data(); // 废弃的发布函数。如需调用，要用getEndTorque二次封装实现，如publish_initial_ext_FandTau所示
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                index++;
+            } else {
+                output.setFinished();
+                stopManually.store(false);
             }
+            RCLCPP_INFO(node_->get_logger(), "1");
+            return output;
+        };
 
-            rtCon_->stopLoop();
-            rtCon_->stopMove();
+        RCLCPP_INFO(node_->get_logger(), "回调函数结束");
+        rtCon_->setControlLoop(callback, 0, true);
+        rtCon_->startLoop(false);
+        
+        while(stopManually.load()) {
         }
-        catch (const std::exception &e) {
-            std::cerr << e.what();
+
+        rtCon_->stopLoop();
+        rtCon_->stopMove();
+        robot_->stopReceiveRobotState(); // 停止接收机器人状态数据
+        // 设置力控坐标系为末端坐标系。需要根据实际加装的末端工具进行调整
+        std::array<double, 16> reset_Coor = {
+            -1, 0, 0, 0, 
+            0, 1, 0, 0, 
+            0, 0, -1, 0, 
+            0, 0, 0, 1
+        };
+        rtCon_->setFcCoor(reset_Coor, FrameType::world, ec_);
+        // robot_->setMotionControlMode(rokae::MotionControlMode::NrtCommand, ec_);
+        // if (ec_) {
+        //     RCLCPP_ERROR(node_->get_logger(), "切换到非实时模式失败: %s", ec_.message().c_str());
+        // }
+        // // **再切换回实时模式，为下一次运动做准备**
+        robot_->setMotionControlMode(rokae::MotionControlMode::RtCommand, ec_);
+        if (ec_) {
+            RCLCPP_ERROR(node_->get_logger(), "切换回实时模式失败: %s", ec_.message().c_str());
         }
+        node_->pose_timer_->reset();
+        node_->extTau_timer_->reset();
+        node_->poseAndextTau_timer_->reset();
+        RCLCPP_INFO(node_->get_logger(), "实时轨迹控制完成");
+    }catch (const std::exception &e) {
+        rtCon_->stopLoop();
+        rtCon_->stopMove();
+        robot_->stopReceiveRobotState(); // 停止接收机器人状态数据
+
+        robot_->setMotionControlMode(rokae::MotionControlMode::RtCommand, ec_);
+        if (ec_) {
+            RCLCPP_ERROR(node_->get_logger(), "切换回实时模式失败: %s", ec_.message().c_str());
+        }
+        node_->pose_timer_->reset();
+        node_->extTau_timer_->reset();
+        node_->poseAndextTau_timer_->reset();
+        RCLCPP_ERROR(node_->get_logger(), "实时轨迹控制错误: %s", e.what());
     }
+}
 
 
 // 目前未使用，未经过验证
@@ -569,7 +617,6 @@ void RobotController::usr_rt_cartesian_v_control(
                 }else{
                     try{
                         // ================================== 轨迹2 ==================================
-                        // TODO 发布位姿数据。
                         if (!tra2_init) {
                         RCLCPP_ERROR(node_->get_logger(), "轨迹2未初始化!");
                         output.setFinished();
@@ -637,7 +684,13 @@ void RobotController::usr_rt_cartesian_v_control(
                 // std::this_thread::sleep_for(std::chrono::milliseconds(1)); 
             }
             
-            // 停止
+            std::array<double, 16> reset_matrix = {
+            1, 0, 0, 0, 
+            0, 1, 0, 0, 
+            0, 0, 1, 0, 
+            0, 0, 0, 1
+            };
+            rtCon_->setFcCoor(reset_matrix, FrameType::world, ec_);
             rtCon_->stopLoop();
             rtCon_->stopMove();
             robot_->stopReceiveRobotState(); // 停止接收机器人状态数据

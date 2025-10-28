@@ -34,7 +34,13 @@ int main() {
 
     // 设置力控坐标系为工具坐标系, 末端相对法兰的坐标系
     std::array<double, 16> toolToFlange = {0, 0, 1, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 0, 1};
-    rtCon->setFcCoor(toolToFlange, FrameType::tool, ec);
+    rtCon->setFcCtd::array<double, 16> reset_Coor = {
+            1, 0, 0, 0, 
+            0, 1, 0, 0, 
+            0, 0, 1, 0, 
+            0, 0, 0, 1
+        };
+        rtCon_->setFcCoor(reset_Coor, FrameType::world, ec_);oor(toolToFlange, FrameType::tool, ec);
     // 设置笛卡尔阻抗系数
     rtCon->setCartesianImpedance({1200, 1200, 0, 100, 100, 0}, ec);
     // 设置X和Z方向3N的期望力

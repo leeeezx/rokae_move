@@ -185,16 +185,38 @@ void Rokae_Move::initialize_robot()
 
         // 机械臂初始化设置
         robot->setRtNetworkTolerance(50, ec); // 网络延迟。若程序运行时控制器已经是实时模式，需要先切换到非实时模式后再更改网络延迟阈值，否则不生效
+        if(ec) {
+            RCLCPP_ERROR(this->get_logger(), "设置网络延迟失败: %s", ec.message().c_str());
+            throw std::runtime_error("网络配置失败");
+        }
 
         auto robotinfo = robot->robotInfo(ec);
-        RCLCPP_INFO(this->get_logger(), "控制器版本号:%s,机型:%s", robotinfo.version.c_str(), robotinfo.type.c_str());
+        if(ec) {
+            RCLCPP_ERROR(this->get_logger(), "获取机器人信息失败: %s", ec.message().c_str());
+            throw std::runtime_error("无法读取机器人信息");
+        }
+        RCLCPP_INFO(this->get_logger(), "控制器版本号:%s,机型:%s", 
+                    robotinfo.version.c_str(), robotinfo.type.c_str());
         RCLCPP_INFO(this->get_logger(), "xCore-SDK 版本: %s", robot->sdkVersion().c_str());
         
         robot->setOperateMode(rokae::OperateMode::automatic, ec); // 操作模式。自动
+        if(ec) {
+            RCLCPP_ERROR(this->get_logger(), "设置操作模式失败: %s", ec.message().c_str());
+            throw std::runtime_error("操作模式切换失败");
+        }
         RCLCPP_INFO(this->get_logger(), "操作模式设置完毕");
+
         robot->setMotionControlMode(MotionControlMode::RtCommand, ec); // 控制模式：实时模式
+        if(ec) {
+            RCLCPP_ERROR(this->get_logger(), "切换实时模式失败: %s", ec.message().c_str());
+            throw std::runtime_error("控制模式切换失败");
+        }
 
         robot->setPowerState(true, ec); // 上电
+        if(ec) {
+            RCLCPP_ERROR(this->get_logger(), "上电失败: %s", ec.message().c_str());
+            throw std::runtime_error("机器人上电失败");
+        }
         RCLCPP_INFO(this->get_logger(), "---机器人上电成功！操作模式：自动，控制模式：实时---");
 
         // 初始化 rtCon

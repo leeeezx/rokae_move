@@ -139,6 +139,11 @@ void RobotController::move_init()
         RCLCPP_INFO(node_->get_logger(), "\n--- 正在归位 !---.");
         rtCon_->MoveL(0.05, start, target);
         RCLCPP_INFO(node_->get_logger(), "--- 已回到初始位置 ---\n\n.");
+
+        rtCon_->stopMove();
+        robot_->setMotionControlMode(rokae::MotionControlMode::RtCommand, ec_);
+
+
     }
     catch (const std::exception &e)
     {
@@ -198,16 +203,28 @@ void RobotController::cartesian_impedance_control(
             0, 0, 0, 1
         };
         rtCon_->setFcCoor(toolToFlange, FrameType::world, ec_);
+        if(ec_) {
+            RCLCPP_ERROR(node_->get_logger(), "设置力控坐标系失败: %s", ec_.message().c_str());
+            throw std::runtime_error("设置力控坐标系失败");
+        }
         RCLCPP_INFO(node_->get_logger(), "力控坐标系设置完成");
 
         // 设置笛卡尔阻抗参数。最大值为 { 1500, 1500, 1500, 100, 100, 100 }, 单位: N/m, Nm/rad。
         // XYZ方向：设置较低刚度以实现柔顺性
         // 姿态方向：保持较高刚度以保持姿态
-        rtCon_->setCartesianImpedance({3000, 3000, 2995, 300, 300, 300 }, ec_);
+        rtCon_->setCartesianImpedance({3000, 3000, 2995, 300, 300, 300}, ec_);
+        if(ec_) {
+            RCLCPP_ERROR(node_->get_logger(), "设置笛卡尔阻抗参数失败: %s", ec_.message().c_str());
+            throw std::runtime_error("设置笛卡尔阻抗参数失败");
+        }
         RCLCPP_INFO(node_->get_logger(), "笛卡尔阻抗参数设置完毕");
         
         // 启动笛卡尔阻抗控制
         rtCon_->startMove(RtControllerMode::cartesianImpedance);
+        if(ec_) {
+            RCLCPP_ERROR(node_->get_logger(), "控制模式切换失败: %s", ec_.message().c_str());
+            throw std::runtime_error("控制模式切换失败");
+        }
         RCLCPP_INFO(node_->get_logger(), "startMove成功");
 
         std::atomic<bool> stopManually{true};
@@ -239,25 +256,33 @@ void RobotController::cartesian_impedance_control(
         }
 
         rtCon_->stopLoop();
+
         rtCon_->stopMove();
+        
         robot_->stopReceiveRobotState(); // 停止接收机器人状态数据
         // 设置力控坐标系为末端坐标系。需要根据实际加装的末端工具进行调整
-        std::array<double, 16> reset_Coor = {
-            -1, 0, 0, 0, 
-            0, 1, 0, 0, 
-            0, 0, -1, 0, 
-            0, 0, 0, 1
-        };
+        std::array<double, 16> reset_Coor = { 1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1 }; // 使用单位矩阵重置
         rtCon_->setFcCoor(reset_Coor, FrameType::world, ec_);
-        // robot_->setMotionControlMode(rokae::MotionControlMode::NrtCommand, ec_);
-        // if (ec_) {
-        //     RCLCPP_ERROR(node_->get_logger(), "切换到非实时模式失败: %s", ec_.message().c_str());
-        // }
-        // // **再切换回实时模式，为下一次运动做准备**
+        if (ec_) {
+            RCLCPP_WARN(node_->get_logger(), "重置力控坐标系失败: %s", ec_.message().c_str());
+        }
+
+        robot_->setMotionControlMode(rokae::MotionControlMode::NrtCommand, ec_);
+        if (ec_) {
+            RCLCPP_ERROR(node_->get_logger(), "切换到非实时模式失败: %s", ec_.message().c_str());
+        } else {
+            RCLCPP_INFO(node_->get_logger(), "已切换到非实时模式。");
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        
         robot_->setMotionControlMode(rokae::MotionControlMode::RtCommand, ec_);
         if (ec_) {
             RCLCPP_ERROR(node_->get_logger(), "切换回实时模式失败: %s", ec_.message().c_str());
+        } else {
+            RCLCPP_INFO(node_->get_logger(), "已成功切换回实时模式。");
         }
+
         node_->pose_timer_->reset();
         node_->extTau_timer_->reset();
         node_->poseAndextTau_timer_->reset();
@@ -267,10 +292,22 @@ void RobotController::cartesian_impedance_control(
         rtCon_->stopMove();
         robot_->stopReceiveRobotState(); // 停止接收机器人状态数据
 
+        robot_->setMotionControlMode(rokae::MotionControlMode::NrtCommand, ec_);
+        if (ec_) {
+            RCLCPP_ERROR(node_->get_logger(), "异常后，切换到非实时模式失败: %s", ec_.message().c_str());
+        } else {
+            RCLCPP_INFO(node_->get_logger(), "异常后，已切换到非实时模式。");
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
         robot_->setMotionControlMode(rokae::MotionControlMode::RtCommand, ec_);
         if (ec_) {
-            RCLCPP_ERROR(node_->get_logger(), "切换回实时模式失败: %s", ec_.message().c_str());
+            RCLCPP_ERROR(node_->get_logger(), "异常后，切换回实时模式失败: %s", ec_.message().c_str());
+        } else {
+            RCLCPP_INFO(node_->get_logger(), "异常后，已成功切换回实时模式。");
         }
+
         node_->pose_timer_->reset();
         node_->extTau_timer_->reset();
         node_->poseAndextTau_timer_->reset();
@@ -684,13 +721,13 @@ void RobotController::usr_rt_cartesian_v_control(
                 // std::this_thread::sleep_for(std::chrono::milliseconds(1)); 
             }
             
-            std::array<double, 16> reset_matrix = {
-            1, 0, 0, 0, 
-            0, 1, 0, 0, 
-            0, 0, 1, 0, 
-            0, 0, 0, 1
-            };
-            rtCon_->setFcCoor(reset_matrix, FrameType::world, ec_);
+            // std::array<double, 16> reset_matrix = {
+            // 1, 0, 0, 0, 
+            // 0, 1, 0, 0, 
+            // 0, 0, 1, 0, 
+            // 0, 0, 0, 1
+            // };
+            // rtCon_->setFcCoor(reset_matrix, FrameType::world, ec_);
             rtCon_->stopLoop();
             rtCon_->stopMove();
             robot_->stopReceiveRobotState(); // 停止接收机器人状态数据

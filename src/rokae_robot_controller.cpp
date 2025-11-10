@@ -133,7 +133,8 @@ void RobotController::move_init()
     {
         CartesianPosition start, target;
         Utils::postureToTransArray(robot_->posture(rokae::CoordinateType::flangeInBase, ec_), start.pos); // 当前位姿
-        std::array<double, 6UL> init_point = {0.45, 0.0, 0.5, 3.14154, 0.0, 3.14154};
+        // std::array<double, 6UL> init_point = {0.45, 0.0, 0.5, 3.14154, 0.0, 3.14154}; // 原始起始位姿
+        std::array<double, 6UL> init_point = {0.45, 0.0, 0.58, 3.14154, 0.0, 3.14154};
         Utils::postureToTransArray(init_point, target.pos); // 将初始位姿设置为目标位姿
 
         RCLCPP_INFO(node_->get_logger(), "\n--- 正在归位 !---.");
@@ -212,7 +213,7 @@ void RobotController::cartesian_impedance_control(
         // 设置笛卡尔阻抗参数。最大值为 { 1500, 1500, 1500, 100, 100, 100 }, 单位: N/m, Nm/rad。
         // XYZ方向：设置较低刚度以实现柔顺性
         // 姿态方向：保持较高刚度以保持姿态
-        rtCon_->setCartesianImpedance({3000, 3000, 2995, 300, 300, 300}, ec_);
+        rtCon_->setCartesianImpedance({1500, 1500, 1490, 100, 100, 100}, ec_);
         if(ec_) {
             RCLCPP_ERROR(node_->get_logger(), "设置笛卡尔阻抗参数失败: %s", ec_.message().c_str());
             throw std::runtime_error("设置笛卡尔阻抗参数失败");
@@ -244,7 +245,7 @@ void RobotController::cartesian_impedance_control(
                 output.setFinished();
                 stopManually.store(false);
             }
-            RCLCPP_INFO(node_->get_logger(), "1");
+            // RCLCPP_INFO(node_->get_logger(), "1");
             return output;
         };
 
@@ -283,9 +284,12 @@ void RobotController::cartesian_impedance_control(
             RCLCPP_INFO(node_->get_logger(), "已成功切换回实时模式。");
         }
 
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
         node_->pose_timer_->reset();
         node_->extTau_timer_->reset();
         node_->poseAndextTau_timer_->reset();
+
         RCLCPP_INFO(node_->get_logger(), "实时轨迹控制完成");
     }catch (const std::exception &e) {
         rtCon_->stopLoop();
@@ -522,6 +526,13 @@ void RobotController::usr_rt_cartesian_v_control(
             node_->extTau_timer_->cancel();
             node_->poseAndextTau_timer_->cancel();
 
+            CartesianPosition reset_start, target;
+            Utils::postureToTransArray(robot_->posture(rokae::CoordinateType::flangeInBase, ec_), reset_start.pos); // 当前位姿
+            std::array<double, 6UL> init_point = {0.45, 0.0, 0.45, 3.14154, 0.0, 3.14154};
+            Utils::postureToTransArray(init_point, target.pos); // 将初始位姿设置为目标位姿
+            rtCon_->MoveL(0.05, reset_start, target);
+            RCLCPP_INFO(node_->get_logger(), "一阶段完成");
+
             // 设置需要接收的机器人状态数据
             std::vector<std::string> fields = {RtSupportedFields::tcpPoseAbc_m, 
                                                 RtSupportedFields::tcpPose_m,
@@ -567,15 +578,15 @@ void RobotController::usr_rt_cartesian_v_control(
             std::array<double, 16> tra2_start_pose_m; //轨迹2的实时起点，array16D行优先矩阵
             bool tra2_init = false; // 轨迹2的起点初始化标志.默认为false，如果初始化成功则为true
 
-            const double total_lift = 0.10; // 轨迹2的上升总距离
-            const double lift_duration_time = 10.0; // 轨迹2的上升持续时间
+            const double total_lift = 0.20; // 轨迹2的上升总距离
+            const double lift_duration_time = 16.0; // 轨迹2的上升持续时间
 
             // 时间触发。备用
             // int callback_count = 0;
             // const int trigger_count = 15000; // 假设1ms周期,5000次 = 5秒
             // bool time_triggered = false; // 防止重复触发
 
-            const double FORCE_THRESHOLD = 0.0; // 力触发阈值，单位：N
+            const double FORCE_THRESHOLD = 40.0; // 力触发阈值，单位：N
 
             // ------------------------------------------------机械臂控制循环回调函数--------------------------------------------------------
             std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {

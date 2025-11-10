@@ -112,15 +112,15 @@ void Rokae_Move::setup_ros_communications()
         floatDesc("Y轴方向(1=正向,-1=负向)", -1, 1, 2));       //Y轴方向
 
     // 添加对角线参数
-    this->declare_parameter("diagonal_air_distance", 0.01, 
+    this->declare_parameter("diagonal_air_distance", 0.05, 
         floatDesc("对角线加速段距离（米）", 0.0, 1.0, 0.001));
-    this->declare_parameter("diagonal_cruise_distance", 0.01,
+    this->declare_parameter("diagonal_cruise_distance", 0.05,
         floatDesc("对角线匀速段距离（米）", 0.0, 1.0, 0.001));
-    this->declare_parameter("diagonal_decel_distance", 0.01,
+    this->declare_parameter("diagonal_decel_distance", 0.02,
         floatDesc("对角线减速段距离（米）", 0.0, 1.0, 0.001));
     this->declare_parameter("diagonal_target_speed", 0.01,
         floatDesc("对角线期望速度（米/秒）", 0.01, 2.5, 0.01));
-    this->declare_parameter("gamma_angle", 45.00,
+    this->declare_parameter("gamma_angle", 10.00,
         floatDesc("对角线Z-Y平面角度（度，0=Y轴负方向，90=Z轴负方向）", 0.00, 90.00, 0.01));
 
     // 订阅键盘输入
@@ -184,7 +184,7 @@ void Rokae_Move::initialize_robot()
         RCLCPP_INFO(this->get_logger(), "---已连接到Rokae机械臂接口, 正在进行初始化---");
 
         // 机械臂初始化设置
-        robot->setRtNetworkTolerance(50, ec); // 网络延迟。若程序运行时控制器已经是实时模式，需要先切换到非实时模式后再更改网络延迟阈值，否则不生效
+        robot->setRtNetworkTolerance(50, ec); // 网络延迟。若程序运行时控制器已经是实时模式，需要先切换到实时模式后再更改网络延迟阈值，否则不生效
         if(ec) {
             RCLCPP_ERROR(this->get_logger(), "设置网络延迟失败: %s", ec.message().c_str());
             throw std::runtime_error("网络配置失败");
@@ -198,6 +198,15 @@ void Rokae_Move::initialize_robot()
         RCLCPP_INFO(this->get_logger(), "控制器版本号:%s,机型:%s", 
                     robotinfo.version.c_str(), robotinfo.type.c_str());
         RCLCPP_INFO(this->get_logger(), "xCore-SDK 版本: %s", robot->sdkVersion().c_str());
+
+        auto operateMode = robot->operateMode(ec);
+        if(ec) {
+            RCLCPP_ERROR(this->get_logger(), "查询操作模式失败: %s", ec.message().c_str());
+            throw std::runtime_error("查询操作模式失败");
+        }
+        RCLCPP_INFO(this->get_logger(), "操作模式： %s", 
+                    operateMode == rokae::OperateMode::automatic ? "automatic" : 
+                    operateMode == rokae::OperateMode::manual ? "manual" : "unknown");  
         
         robot->setOperateMode(rokae::OperateMode::automatic, ec); // 操作模式。自动
         if(ec) {
@@ -576,9 +585,9 @@ void Rokae_Move::publish_initial_poseAndextTau(){
             return;
         }
         std::array<double, 6> combined_force_torque;
-        combined_force_torque[0] = cart_force[0]; // 取反
+        combined_force_torque[0] = -cart_force[0]; // 取反
         combined_force_torque[1] = cart_force[1]; 
-        combined_force_torque[2] = cart_force[2]; // 取反
+        combined_force_torque[2] = -cart_force[2]; // 取反
         combined_force_torque[3] = cart_torque[0];
         combined_force_torque[4] = cart_torque[1];
         combined_force_torque[5] = cart_torque[2];

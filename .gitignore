@@ -1,2 +1,72 @@
-
 /v5.1-extensive-20241201.md
+
+# --- ROS 2 / Colcon Build System ---
+build/
+install/
+log/
+# If you use local setup files
+local_setup.bash
+local_setup.sh
+local_setup.zsh
+setup.bash
+setup.sh
+setup.zsh
+
+# --- CMake & Build Artifacts ---
+CMakeCache.txt
+CMakeFiles/
+Makefile
+cmake_install.cmake
+compile_commands.json
+CTestTestfile.cmake
+*.cmake
+!CMakeLists.txt
+!/external/**/CMakeLists.txt
+
+# --- Intermediate Object Files ---
+*.o
+*.obj
+*.s
+*.d
+
+# --- Libraries & Executables ---
+# Ignore shared libraries and executables generally...
+*.so
+*.so.*
+*.dylib
+*.dll
+*.a
+*.exe
+*.bin
+
+# ...BUT force-include the vendor libraries in lib/ specific to this project
+!lib/*.a
+!lib/*.so
+!lib/*.so.*
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.rosinstall
+pyvenv.cfg
+.venv/
+venv/
+
+# --- IDE & Editor ---
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/c_cpp_properties.json
+!.vscode/extensions.json
+.idea/
+.vs/
+*.swp
+*~
+*.user
+*.kdev4
+
+# --- OS Generated ---
+.DS_Store
+Thumbs.db
+ehthumbs.db

@@ -299,31 +299,37 @@ void Rokae_Move::keyborad_callback(const std_msgs::msg::String::SharedPtr msg)
     switch (key[0])
     {
     case 'q':
-        points_array = string_to_array(cartesian_points_string);
-        if (points_array.size() == 6) {
-            // std::cout << " We will go to -> " << points_array << std::endl;
-            robot_controller_->move_command(points_array, velocity); // 委托
-        } else {
-            RCLCPP_ERROR(get_logger(), "Error : 应该输入6个数字且之间用空格连接");
-        }
+        // points_array = string_to_array(cartesian_points_string);
+        // if (points_array.size() == 6) {
+        //     // std::cout << " We will go to -> " << points_array << std::endl;
+        //     robot_controller_->move_command(points_array, velocity); // 委托
+        // } else {
+        //     RCLCPP_ERROR(get_logger(), "Error : 应该输入6个数字且之间用空格连接");
+        // }
+        RCLCPP_WARN(this->get_logger(), "功能 'move_command' (q) 尚未重构，暂时禁用");
         break;
     case 'w':
-        robot_controller_->cartesian_impedance_control(diagonal_air_dist, diagonal_cruise_dist, diagonal_decel_dist, 
-                                                    diagonal_target_speed, 
-                                                    gamma_angle);
+        // robot_controller_->cartesian_impedance_control(diagonal_air_dist, diagonal_cruise_dist, diagonal_decel_dist, 
+        //                                             diagonal_target_speed, 
+        //                                             gamma_angle);
+        RCLCPP_WARN(this->get_logger(), "功能 'cartesian_impedance_control' (w) 尚未重构，暂时禁用");
         break;
     case 'e':
-        robot_controller_->move_enableDrag();
+        // robot_controller_->move_enableDrag();
+        RCLCPP_WARN(this->get_logger(), "功能 'move_enableDrag' (e) 尚未重构，暂时禁用");
         break;
     case 'd':
-        robot_controller_->move_disableDrag();
+        // robot_controller_->move_disableDrag();
+        RCLCPP_WARN(this->get_logger(), "功能 'move_disableDrag' (d) 尚未重构，暂时禁用");
         break;
     case '`':
-        robot_controller_->move_init();
+        // robot_controller_->move_init();
+        RCLCPP_WARN(this->get_logger(), "功能 'move_init' (`) 尚未重构，暂时禁用");
         break;
     case 'r':
-        RCLCPP_INFO(this->get_logger(), "启动实时轨迹控制");
-        robot_controller_->usr_rt_cartesian_control(10.0, 10.0);
+        // RCLCPP_INFO(this->get_logger(), "启动实时轨迹控制");
+        // robot_controller_->usr_rt_cartesian_control(10.0, 10.0);
+        RCLCPP_WARN(this->get_logger(), "功能 'usr_rt_cartesian_control' (r) 尚未重构，暂时禁用");
         break;
     case 'v':
         RCLCPP_INFO(this->get_logger(), "启动速度控制");
@@ -337,15 +343,17 @@ void Rokae_Move::keyborad_callback(const std_msgs::msg::String::SharedPtr msg)
         );
         break;
     case 'n': // 新增键位支持垂直+对角轨迹控制
-        RCLCPP_INFO(this->get_logger(), "启动垂直下压+对角线运动控制（角度:%.1f度）", gamma_angle);
-        robot_controller_->usr_rt_vertical_diagonal_control(
-            air_dist, cruise_dist, decel_dist, target_speed,  // 垂直段参数
-            diagonal_air_dist, diagonal_cruise_dist, diagonal_decel_dist, diagonal_target_speed,  // 对角线段参数
-            gamma_angle  // 对角线角度
-        );
+        // RCLCPP_INFO(this->get_logger(), "启动垂直下压+对角线运动控制（角度:%.1f度）", gamma_angle);
+        // robot_controller_->usr_rt_vertical_diagonal_control(
+        //     air_dist, cruise_dist, decel_dist, target_speed,  // 垂直段参数
+        //     diagonal_air_dist, diagonal_cruise_dist, diagonal_decel_dist, diagonal_target_speed,  // 对角线段参数
+        //     gamma_angle  // 对角线角度
+        // );
+        RCLCPP_WARN(this->get_logger(), "功能 'usr_rt_vertical_diagonal_control' (n) 尚未重构，暂时禁用");
         break;
     case 't': // 用于测试布尔原子变量是否可以传递进机器人回调函数中
-        robot_controller_->usr_rt_stationary_control(hold_duration = 20);
+        // robot_controller_->usr_rt_stationary_control(hold_duration = 20);
+        RCLCPP_WARN(this->get_logger(), "功能 'usr_rt_stationary_control' (t) 尚未重构，暂时禁用");
         break;
     default:
         RCLCPP_INFO(this->get_logger(), "你在狗叫什么");

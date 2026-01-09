@@ -16,14 +16,55 @@ using namespace std;
  */
 RobotController::RobotController(std::shared_ptr<xMateErProRobot> robot,
                                  std::shared_ptr<RtMotionControlCobot<7U>> rtCon,
-                                 Rokae_Move* node)
-    : robot_(robot), rtCon_(rtCon), node_(node)
+                                 Rokae_Move* node,
+                                 SensorSharedData* shared_data)
+    : robot_(robot), rtCon_(rtCon), node_(node), shared_data_(shared_data)
 {
     RCLCPP_INFO(node_->get_logger(), "RobotController初始化完成");
 }
 
 RobotController::~RobotController() {
     RCLCPP_INFO(node_->get_logger(), "RobotController is being destroyed.");
+}
+
+
+/**
+ * @brief 停止控制循环并执行清理序列
+ */
+void RobotController::stop_control() {
+    // 1. 停止 SDK 控制循环
+    try {
+        rtCon_->stopLoop();
+    } catch (const std::exception& e) {
+        RCLCPP_WARN(node_->get_logger(), "rtCon_->stopLoop() failed: %s", e.what());
+    }
+
+    // 2. 停止运动
+    try {
+        rtCon_->stopMove();
+    } catch (const std::exception& e) {
+        RCLCPP_WARN(node_->get_logger(), "rtCon_->stopMove() failed: %s", e.what());
+    }
+
+    // 3. 停止接收数据
+    try {
+        robot_->stopReceiveRobotState();
+    } catch (const std::exception& e) {
+        RCLCPP_WARN(node_->get_logger(), "robot_->stopReceiveRobotState() failed: %s", e.what());
+    }
+
+    // 4. 重置定时器
+    if (node_->pose_timer_) node_->pose_timer_->reset();
+    if (node_->extTau_timer_) node_->extTau_timer_->reset();
+    if (node_->poseAndextTau_timer_) node_->poseAndextTau_timer_->reset();
+
+    // 5. 重置标志位
+    trajectory_state_.store(TrajectoryState::INITIAL_TRAJECTORY);
+    force_trigger_.store(false);
+    is_control_running_.store(false);
+    cleanup_needed_.store(false);
+
+    RCLCPP_INFO(node_->get_logger(), "Control Loop Stopped & Cleaned up");
 }
 
 
@@ -266,16 +307,7 @@ void RobotController::usr_rt_cartesian_v_control(
 
         } catch (const std::exception &e) {
             // 发生异常时的清理 (仅在启动阶段出错时同步清理)
-            node_->pose_timer_->reset();
-            node_->extTau_timer_->reset();
-            node_->poseAndextTau_timer_->reset();
-            robot_->stopReceiveRobotState(); 
-            rtCon_->stopLoop();
-            rtCon_->stopMove();
-            force_trigger_.store(false);
-            trajectory_state_.store(TrajectoryState::INITIAL_TRAJECTORY);
-            is_control_running_.store(false);
-            cleanup_needed_.store(false);
+            stop_control();
             RCLCPP_ERROR(node_->get_logger(), "实时轨迹控制启动错误: %s", e.what());
         }
     }

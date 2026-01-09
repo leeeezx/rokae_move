@@ -59,23 +59,23 @@ public:
     // ====================== 从 Rokae_Move 类迁移过来的所有机器人动作函数 ======================
     // =======================================================================================
 
-    void move_enableDrag();
-    void move_disableDrag();
+    // void move_enableDrag();
+    // void move_disableDrag();
 
 
-    void move_command(const std::array<double, 6UL> &car_vec, double velocity);
-    void move_init();
-    void cartesian_impedance_control(double air_dist, double cruise_dist, double decel_dist, double target_speed, double gamma_deg);
-    void usr_cartesian_force_control(double desired_force_z, double first_time, double second_time);
-    void usr_rt_cartesian_control(double first_time, double second_time);
+    // void move_command(const std::array<double, 6UL> &car_vec, double velocity);
+    // void move_init();
+    // void cartesian_impedance_control(double air_dist, double cruise_dist, double decel_dist, double target_speed, double gamma_deg);
+    // void usr_cartesian_force_control(double desired_force_z, double first_time, double second_time);
+    // void usr_rt_cartesian_control(double first_time, double second_time);
     void usr_rt_cartesian_v_control(double z_air_dist, double z_cruise_dist, double z_decel_dist, double z_target_speed,
                                     double y_air_dist = 0.0, double y_cruise_dist = 0.0, double y_decel_dist = 0.0, 
                                     double y_target_speed = 0.0, int y_direction = 1);
     void usr_rt_cartesian_v_control_z(double air_dist, double cruise_dist, double decel_dist, double target_speed);
-    void usr_rt_vertical_diagonal_control(double vertical_air_dist, double vertical_cruise_dist, double vertical_decel_dist, double vertical_target_speed,
-                                            double diagonal_air_dist, double diagonal_cruise_dist, double diagonal_decel_dist, double diagonal_target_speed,
-                                            double gamma_deg);
-    void usr_rt_stationary_control(double hold_duration);
+    // void usr_rt_vertical_diagonal_control(double vertical_air_dist, double vertical_cruise_dist, double vertical_decel_dist, double vertical_target_speed,
+    //                                         double diagonal_air_dist, double diagonal_cruise_dist, double diagonal_decel_dist, double diagonal_target_speed,
+    //                                         double gamma_deg);
+    // void usr_rt_stationary_control(double hold_duration);
 
 private:
     // 指向机械臂和实时控制器的共享指针
@@ -106,17 +106,17 @@ private:
     std::atomic<bool>force_trigger_{false}; // 力控触发标志。原子布尔变量。
 
     // 力控结构体                           目前未使用
-    struct ForceController {
-        double desired_force_z = -5.0;
-        double force_error = 0.0;
-        double force_integral = 0.0;
-        double kp = 0.0005;
-        double ki = 0.0001;
-        double max_adjust = 0.001;
+    // struct ForceController {
+    //     double desired_force_z = -5.0;
+    //     double force_error = 0.0;
+    //     double force_integral = 0.0;
+    //     double kp = 0.0005;
+    //     double ki = 0.0001;
+    //     double max_adjust = 0.001;
         
-        double calculateAdjustment(double current_force);
-        void reset();
-    } force_controller_;
+    //     double calculateAdjustment(double current_force);
+    //     void reset();
+    // } force_controller_;
 };
 
 

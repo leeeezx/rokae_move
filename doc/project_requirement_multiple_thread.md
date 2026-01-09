@@ -14,11 +14,11 @@
 
 ## 进度检查与更新
 每次修改代码后，在此处以任务列表形式记录进度：
-- [x] 3.1 创建 SensorSharedData
-- [x] 3.4 修改 RobotController 头文件
-- [x] 3.2 修改 Rokae_Move 头文件
-- [x] 3.5 重构 RobotController 源文件 (核心逻辑)
-- [x] 3.3 修改 Rokae_Move 源文件 (连接逻辑)
+- [x] 3.1 创建 SensorSharedData - 已检查
+- [x] 3.4 修改 RobotController 头文件 - 已检查
+- [x] 3.2 修改 Rokae_Move 头文件 - 已检查
+- [x] 3.5 重构 RobotController 源文件 (核心逻辑) - 已检查
+- [x] 3.3 修改 Rokae_Move 源文件 (连接逻辑) - 已检查
 
 ## 1. 项目背景与目标
 **现状**：当前控制逻辑中，`usr_rt_cartesian_v_control` 函数内包含 `while(stopManually.load())` 死循环，导致主线程阻塞，无法响应 ROS 话题（传感器、键盘）。

@@ -14,6 +14,7 @@
 #include <mutex>
 
 #include "rokae_node/rokae_robot_controller.hpp"
+#include "rokae_node/sensor_shared_data.hpp"
 
 
 namespace rokae {
@@ -46,9 +47,9 @@ public:
     rclcpp::TimerBase::SharedPtr poseAndextTau_timer_;
 
     rclcpp::TimerBase::SharedPtr force_trigger_timer_;
+    rclcpp::TimerBase::SharedPtr status_monitor_timer_; // 状态监控定时器
 
-    // 回调函数
-    bool z_force_check(double force_threshold = 2.0); 
+    // 回调函数 
 
 
 private:
@@ -63,7 +64,8 @@ private:
     // ==================================== 回调函数 ====================================
     void keyborad_callback(const std_msgs::msg::String::SharedPtr msg); // 键盘输入回调函数
 
-    void z_force_callback(const std_msgs::msg::Float32::SharedPtr msg);
+    void sensor_callback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);
+    void monitor_loop_callback();
     
     
     // ======================================== 定时器调用的发布函数 ========================================
@@ -82,6 +84,7 @@ private:
 
     // --- 机器人控制器 ---
     std::unique_ptr<RobotController> robot_controller_;
+    SensorSharedData sensor_data_; // 实例化共享数据
 
     // ====================================== ROS通信 ======================================
     // 发布者 
@@ -98,11 +101,10 @@ private:
     
     std::string cartesian_points_string;
     // std::string velocity;
-    std::atomic<double> latest_force_z_{0.0}; // 最新的Z轴力值，原子变量以确保线程安全
     
     std::array<double, 6UL> points_array;
         
     
-    rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr z_force_subscription_;
+    rclcpp::Subscription<geometry_msgs::msg::WrenchStamped>::SharedPtr sensor_subscription_;
         
 };

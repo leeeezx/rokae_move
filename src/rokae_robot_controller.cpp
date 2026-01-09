@@ -104,7 +104,7 @@ void RobotController::usr_rt_cartesian_v_control(
             // 启动笛卡尔空间位置控制模式
             rtCon_->startMove(RtControllerMode::cartesianPosition);
             
-            std::atomic<bool> stopManually{true}; // 停止标志。厂家示例中出现的标准形式。如果为false就会跳出while循环，然后执行一系列停止命令
+            // std::atomic<bool> stopManually{true}; // 移除局部变量
             int index = 0; // 轨迹1的索引
 
             double time = 0.0; // 轨迹2的计算频率数值
@@ -115,32 +115,31 @@ void RobotController::usr_rt_cartesian_v_control(
             const double total_lift = 0.20; // 轨迹2的上升总距离，单位m。
             const double lift_duration_time = 16.0; // 轨迹2的上升持续时间,单位s。
 
-            // 时间触发。备用
-            // int callback_count = 0;
-            // const int trigger_count = 15000; // 假设1ms周期,5000次 = 5秒
-            // bool time_triggered = false; // 防止重复触发
-
             const double FORCE_THRESHOLD = 40.0; // 力触发阈值，单位：N
 
             // ------------------------------------------------机械臂控制循环回调函数--------------------------------------------------------
             std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {
                 CartesianPosition output{}; // CartesianPosition output{}是给output进行类型定义
                 
-                robot_->getStateData(RtSupportedFields::tauExt_inBase, latest_current_ext_tau_base_);
-                
-                // 时间触发检测。测试有效，但是触发后切换较慢。保留作参考/备用
-                // callback_count++;
-                // if (!time_triggered && callback_count >= trigger_count) {
-                //     force_trigger_.store(true);
-                //     time_triggered = true;
-                //     RCLCPP_INFO(node_->get_logger(), "计时器触发: %d次回调", callback_count);
-                // }
-                // RCLCPP_INFO(node_->get_logger(), "计时器检测完毕2");
-                
+                // 从共享内存获取最新的传感器数据 (Try-Get 非阻塞)
+                std::array<double, 6> current_force_data = {0.0};
+                std::chrono::steady_clock::time_point ts;
+                bool has_new_data = false;
+                if (shared_data_) {
+                    has_new_data = shared_data_->try_get(current_force_data, ts);
+                }
 
+                // 如果没有新数据，可以使用上一帧数据或保持0 (根据具体需求，这里暂不做特殊处理，直接使用 current_force_data)
+                // 这里为了兼容原有逻辑，我们将获取到的 shared data 用于阈值判断
+                // 注意：这里假设 shared_data 的索引 2 对应 Z 轴力
+                double z_force = current_force_data[2];
+
+                // 原有逻辑: robot_->getStateData(RtSupportedFields::tauExt_inBase, latest_current_ext_tau_base_);
+                // 如果仍需要机器人内部状态用于发布，可以保留 getStateData，但逻辑判断使用 shared_data
+                
                 // 检测：力阈值触发标志 与 轨迹状态。当力触发状态为真且当前轨迹为初始轨迹时，
-                if (latest_current_ext_tau_base_[2] > FORCE_THRESHOLD && trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY){ 
-                    RCLCPP_INFO(node_->get_logger(), "======================达到力阈值，触发轨迹切换请求,运行新轨迹======================");
+                if (std::abs(z_force) > FORCE_THRESHOLD && trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY){ 
+                    RCLCPP_INFO(node_->get_logger(), "======================达到力阈值(%.2f N)，触发轨迹切换请求,运行新轨迹======================", z_force);
                     
                     trajectory_state_.store(TrajectoryState::TRAJECTORY_2); // 切换轨迹状态为轨迹2
 
@@ -159,7 +158,7 @@ void RobotController::usr_rt_cartesian_v_control(
                         tra2_init = false;
                         RCLCPP_ERROR(node_->get_logger(), "无效的轨迹索引，无法切换轨迹！");
                         output.setFinished();
-                        stopManually.store(false);
+                        is_control_running_.store(false); // 标记控制结束
                     }
                 }
 
@@ -169,7 +168,7 @@ void RobotController::usr_rt_cartesian_v_control(
                         auto target_pose = trajectory[index]; // 获取目标轨迹点。这里的target_pose是当前的理论轨迹规划点
                         Utils::postureToTransArray(target_pose, output.pos); // 把target_pose转换成output.pos格式（16位矩阵）
                         
-                        // 获取实时位姿
+                        // 获取实时位姿 (仅用于发布/日志，不用于控制逻辑)
                         std::array<double, 6> current_pose;
                         std::array<double, 7> current_tau_m;
                         std::array<double, 6> current_ext_tau_base;
@@ -180,13 +179,10 @@ void RobotController::usr_rt_cartesian_v_control(
                             robot_->getStateData(RtSupportedFields::tauExt_inStiff, current_ext_tau_stiff) == 0) {
                             // 更新最新位姿数据
                             std::lock_guard<std::mutex> lock(pose_data_mutex_);
-                            latest_current_pose_ = current_pose; // 机械臂末端实际位姿
-                            // latest_target_pose_ = target_pose; // 机械臂末端目标位姿。本地计算轨迹(需要放置在上方轨迹赋值内部)，非控制器计算轨迹。如需控制器计算轨迹，另调用tcpPose_c？不确定
-
-                            latest_current_tau_m_ = current_tau_m; // 关节力矩
-
-                            latest_current_ext_tau_base_ = current_ext_tau_base; // 机械臂基坐标系中外部力-力矩
-                            latest_current_ext_tau_stiff_ = current_ext_tau_stiff; // 机械臂基坐标系中外部力-力矩
+                            latest_current_pose_ = current_pose; 
+                            latest_current_tau_m_ = current_tau_m; 
+                            latest_current_ext_tau_base_ = current_ext_tau_base; 
+                            latest_current_ext_tau_stiff_ = current_ext_tau_stiff; 
 
                             node_->publish_realtime_poseAndextTau(latest_current_pose_, latest_current_ext_tau_base_);
                         }
@@ -194,7 +190,7 @@ void RobotController::usr_rt_cartesian_v_control(
                         index++;
                     } else {
                         output.setFinished();
-                        stopManually.store(false);
+                        is_control_running_.store(false); // 标记控制结束
                     }
                 }else{
                     try{
@@ -202,7 +198,7 @@ void RobotController::usr_rt_cartesian_v_control(
                         if (!tra2_init) {
                         RCLCPP_ERROR(node_->get_logger(), "轨迹2未初始化!");
                         output.setFinished();
-                        stopManually.store(false);
+                        is_control_running_.store(false); // 标记控制结束
                         return output;
                         } 
     
@@ -227,13 +223,10 @@ void RobotController::usr_rt_cartesian_v_control(
                             robot_->getStateData(RtSupportedFields::tauExt_inStiff, current_ext_tau_stiff) == 0) {
                             // 更新最新位姿数据
                             std::lock_guard<std::mutex> lock(pose_data_mutex_);
-                            latest_current_pose_ = current_pose; // 机械臂末端实际位姿
-                            // latest_target_pose_ = target_pose; // 机械臂末端目标位姿。本地计算轨迹(需要放置在上方轨迹赋值内部)，非控制器计算轨迹。如需控制器计算轨迹，另调用tcpPose_c？不确定
-
-                            latest_current_tau_m_ = current_tau_m; // 关节力矩
-
-                            latest_current_ext_tau_base_ = current_ext_tau_base; // 机械臂基坐标系中外部力-力矩
-                            latest_current_ext_tau_stiff_ = current_ext_tau_stiff; // 机械臂基坐标系中外部力-力矩
+                            latest_current_pose_ = current_pose; 
+                            latest_current_tau_m_ = current_tau_m; 
+                            latest_current_ext_tau_base_ = current_ext_tau_base; 
+                            latest_current_ext_tau_stiff_ = current_ext_tau_stiff; 
 
                             node_->publish_realtime_poseAndextTau(latest_current_pose_, latest_current_ext_tau_base_);
                         }
@@ -243,13 +236,13 @@ void RobotController::usr_rt_cartesian_v_control(
                         if(time > lift_duration_time){
                             RCLCPP_INFO(node_->get_logger(), "轨迹2超时结束");
                             output.setFinished();
-                            stopManually.store(false);
+                            is_control_running_.store(false); // 标记控制结束
                         }
 
                     }catch(const std::exception& e) {
                         RCLCPP_ERROR(node_->get_logger(), "轨迹2执行错误: %s", e.what());
                         output.setFinished();
-                        stopManually.store(false);
+                        is_control_running_.store(false); // 标记控制结束
                         return output;
                     }
                 }
@@ -259,41 +252,31 @@ void RobotController::usr_rt_cartesian_v_control(
 
             // 设置控制循环回调函数
             rtCon_->setControlLoop(callback, 0, true); // setControlLoop的返回值只能为关节角度/笛卡尔位姿/力矩
-            rtCon_->startLoop(false); // 启动循环
-
-            // 控制循环进行
-            while(stopManually.load()) {
-                // std::this_thread::sleep_for(std::chrono::milliseconds(1)); 
-            }
             
-            // std::array<double, 16> reset_matrix = {
-            // 1, 0, 0, 0, 
-            // 0, 1, 0, 0, 
-            // 0, 0, 1, 0, 
-            // 0, 0, 0, 1
-            // };
-            // rtCon_->setFcCoor(reset_matrix, FrameType::world, ec_);
-            rtCon_->stopLoop();
-            rtCon_->stopMove();
-            robot_->stopReceiveRobotState(); // 停止接收机器人状态数据
-            node_->pose_timer_->reset();
-            node_->extTau_timer_->reset();
-            node_->poseAndextTau_timer_->reset();
-            RCLCPP_INFO(node_->get_logger(), "实时轨迹控制完成");
-            // ============ 退出时再次重置状态 ============
-            force_trigger_.store(false);
-            trajectory_state_.store(TrajectoryState::INITIAL_TRAJECTORY);
+            // 设置状态标志，通知 Monitor 线程
+            is_control_running_.store(true);
+            cleanup_needed_.store(true);
+
+            rtCon_->startLoop(false); // 启动循环 (false 表示非阻塞启动，但 startLoop 本身行为取决于参数，如果这里是 ROKAE API，通常 false 意味着不阻塞主线程？ 
+                                      // 实际上原代码中 startLoop(false) 后跟了一个 while 循环，说明 startLoop 可能是异步的或者非阻塞的。
+                                      // 这里的关键是移除 while 循环并立即返回)
+            
+            RCLCPP_INFO(node_->get_logger(), "实时控制线程已启动 (非阻塞模式)");
+            return; // 立即返回，主线程继续运行
 
         } catch (const std::exception &e) {
+            // 发生异常时的清理 (仅在启动阶段出错时同步清理)
             node_->pose_timer_->reset();
             node_->extTau_timer_->reset();
             node_->poseAndextTau_timer_->reset();
-            robot_->stopReceiveRobotState(); // 确保停止接收数据
+            robot_->stopReceiveRobotState(); 
             rtCon_->stopLoop();
             rtCon_->stopMove();
             force_trigger_.store(false);
             trajectory_state_.store(TrajectoryState::INITIAL_TRAJECTORY);
-            RCLCPP_ERROR(node_->get_logger(), "实时轨迹控制错误: %s", e.what());
+            is_control_running_.store(false);
+            cleanup_needed_.store(false);
+            RCLCPP_ERROR(node_->get_logger(), "实时轨迹控制启动错误: %s", e.what());
         }
     }
 

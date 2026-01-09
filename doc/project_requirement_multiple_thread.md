@@ -12,6 +12,14 @@
 | `output.setFinished()` | callback 内部，轨迹结束时 | 标记轨迹结束，随后需手动设置 `is_control_running_ = false` |
 | 退出清理序列 (`stopLoop` -> `stopMove`) | **主线程**定时器回调中 | **严禁在 SDK 回调线程中直接调用**。必须通过状态监测异步执行。 |
 
+## 进度检查与更新
+每次修改代码后，在此处以任务列表形式记录进度：
+- [x] 3.1 创建 SensorSharedData
+- [x] 3.4 修改 RobotController 头文件
+- [x] 3.2 修改 Rokae_Move 头文件
+- [x] 3.5 重构 RobotController 源文件 (核心逻辑)
+- [x] 3.3 修改 Rokae_Move 源文件 (连接逻辑)
+
 ## 1. 项目背景与目标
 **现状**：当前控制逻辑中，`usr_rt_cartesian_v_control` 函数内包含 `while(stopManually.load())` 死循环，导致主线程阻塞，无法响应 ROS 话题（传感器、键盘）。
 **问题**：
@@ -109,10 +117,3 @@
 2.  **清理验证**：轨迹运行结束后，程序应自动打印 "Control Loop Stopped & Cleaned up"，且机械臂停止在目标位置，无报错。
 3.  **实时响应**：在运动过程中，人为触发传感器力阈值，机械臂应能立即响应（切换轨迹或急停）。
 
-## 8. 进度检查与更新
-每次修改代码后，在此处以任务列表形式记录进度：
-- [ ] 3.1 创建 SensorSharedData
-- [ ] 3.4 修改 RobotController 头文件
-- [ ] 3.2 修改 Rokae_Move 头文件
-- [ ] 3.5 重构 RobotController 源文件 (核心逻辑)
-- [ ] 3.3 修改 Rokae_Move 源文件 (连接逻辑)

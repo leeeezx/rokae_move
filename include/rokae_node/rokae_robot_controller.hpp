@@ -4,11 +4,13 @@
 #include "rokae_move/robot.h"
 #include "rokae_move/motion_control_rt.h"
 #include "rokae_move/utility.h"
+#include "rokae_node/sensor_shared_data.hpp"
 
 #include <functional>
 #include <memory>
 #include <vector>
 #include <array>
+#include <atomic>
 
 class TrajectoryGenerator; 
 class Rokae_Move;
@@ -26,14 +28,31 @@ public:
      * @param robot 指向机械臂对象的共享指针
      * @param rtCon 指向实时运动控制对象的共享指针
      * @param node 指向ROS节点的指针，用于日志输出
+     * @param shared_data 指向传感器共享数据的指针
      */
     RobotController(std::shared_ptr<rokae::xMateErProRobot> robot,
                     std::shared_ptr<rokae::RtMotionControlCobot<7U>> rtCon,
-                    Rokae_Move* node);
+                    Rokae_Move* node,
+                    SensorSharedData* shared_data);
     /**
      * @brief 析构函数，确保资源正确释放
      */
     ~RobotController();
+
+    /**
+     * @brief 停止控制循环并执行清理序列
+     */
+    void stop_control();
+
+    /**
+     * @brief 检查控制是否正在运行
+     */
+    bool is_running() const { return is_control_running_.load(); }
+
+    /**
+     * @brief 检查是否需要清理
+     */
+    bool needs_cleanup() const { return cleanup_needed_.load(); }
 
 
     // =======================================================================================
@@ -65,6 +84,9 @@ private:
     std::error_code ec_;
 
     Rokae_Move* node_; 
+    SensorSharedData* shared_data_;
+    std::atomic<bool> is_control_running_{false};
+    std::atomic<bool> cleanup_needed_{false};
 
 
     std::atomic<int> publish_counter_{0}; // 计数器，用于控制回调函数内数据发布频率

@@ -25,7 +25,7 @@ Rokae_Move::Rokae_Move(std::string name) : Node(name)
 
     // 创建并初始化机器人控制器，将硬件连接和当前节点指针传给它
     if (robot && rtCon) {
-        robot_controller_ = std::make_unique<RobotController>(robot, rtCon, this);
+        robot_controller_ = std::make_unique<RobotController>(robot, rtCon, this, &sensor_data_);
     } else {
         RCLCPP_FATAL(this->get_logger(), "Robot SDK objects 不存在，初始化可能失败, 无法创建 RobotController.");
         rclcpp::shutdown();
@@ -126,12 +126,16 @@ void Rokae_Move::setup_ros_communications()
     // 订阅键盘输入
     keyborad = this->create_subscription<std_msgs::msg::String>("/keystroke", 10, std::bind(&Rokae_Move::keyborad_callback, this, std::placeholders::_1));
 
-    // // 订阅
-    // // 订阅 force_sensor_data 话题topic，使force_subscription_指向本订阅者(智能指针)
-    // z_force_subscription_ = this->create_subscription<std_msgs::msg::Float32>(
-    //     "force_sensor_z", // 要订阅的topic的名称
-    //     10, // 队列深度（QoS）。表示最多缓存多少条未处理的消息。
-    //     std::bind(&Rokae_Move::z_force_callback, this, std::placeholders::_1)); // 回调函数。当订阅收到消息时，就会调用这个回调函数
+    // 订阅六维力传感器数据 (Best Effort + Volatile)
+    sensor_subscription_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
+        "/force_sensor_x", 
+        rclcpp::SensorDataQoS(), 
+        std::bind(&Rokae_Move::sensor_callback, this, std::placeholders::_1));
+
+    // 创建状态监控定时器 (20Hz)
+    status_monitor_timer_ = this->create_wall_timer(
+        std::chrono::milliseconds(50),
+        std::bind(&Rokae_Move::monitor_loop_callback, this));
     
     // 发布
     // 添加实时位姿数据发布者
@@ -369,14 +373,34 @@ std::array<double, 6UL> Rokae_Move::string_to_array(const std::string &str)
 // =====================================================================================================
 
 /**
- * @brief 力数据订阅回调函数，用来获取最新的力数据                                          未使用
- * @param msg 力数据消息
+ * @brief 传感器数据回调函数
+ * @param msg 六维力传感器消息
  */
-void Rokae_Move::z_force_callback(const std_msgs::msg::Float32::SharedPtr msg)
+void Rokae_Move::sensor_callback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg)
 {
-    latest_force_z_.store(msg->data); 
-    // RCLCPP_INFO(this->get_logger(), "接收到力数据: %.2f N", msg->data);
-    // RCLCPP_INFO(this->get_logger(), "=================ros订阅者接收到力数据: %.2f N=====================", latest_force_z_.load());
+    std::array<double, 6> data;
+    data[0] = msg->wrench.force.x;
+    data[1] = msg->wrench.force.y;
+    data[2] = msg->wrench.force.z;
+    data[3] = msg->wrench.torque.x;
+    data[4] = msg->wrench.torque.y;
+    data[5] = msg->wrench.torque.z;
+
+    sensor_data_.update(data);
+}
+
+/**
+ * @brief 状态监控回调函数，用于检测SDK线程状态并执行清理
+ */
+void Rokae_Move::monitor_loop_callback()
+{
+    if (robot_controller_) {
+        // 检查控制器是否停止运行且需要清理
+        if (!robot_controller_->is_running() && robot_controller_->needs_cleanup()) {
+            RCLCPP_INFO(this->get_logger(), "Detected control loop finished. Performing cleanup...");
+            robot_controller_->stop_control();
+        }
+    }
 }
 
 // 让这个函数去检查力阈值，然后让callback来调用这个函数，这个函数应该返回一个bool。              未使用

@@ -134,7 +134,7 @@ void RobotController::move_init()
         CartesianPosition start, target;
         Utils::postureToTransArray(robot_->posture(rokae::CoordinateType::flangeInBase, ec_), start.pos); // 当前位姿
         // std::array<double, 6UL> init_point = {0.45, 0.0, 0.5, 3.14154, 0.0, 3.14154}; // 原始起始位姿
-        std::array<double, 6UL> init_point = {0.45, 0.0, 0.58, 3.14154, 0.0, 3.14154};
+        std::array<double, 6UL> init_point = {0.45, 0.0, 0.58, 3.14154, 0.0, 3.14154}; // 改到0.58，可以直接铲土
         Utils::postureToTransArray(init_point, target.pos); // 将初始位姿设置为目标位姿
 
         RCLCPP_INFO(node_->get_logger(), "\n--- 正在归位 !---.");
@@ -151,6 +151,49 @@ void RobotController::move_init()
         std::cerr << e.what() << '\n';
     }
 }
+
+/**
+ * @brief 王刘伟实验
+ * @note 思路，先使用moveL垂直向下到第一个点point_1，然后再用moveL斜着到下一个点point_2。
+ *       再写一个函数，用moveL从point_2返回point_1。
+ */
+void RobotController::wangliuwei_exp_1(const std::array<double, 6>& point_1, const std::array<double, 6>& point_2)
+{
+    CartesianPosition start_1, start_2, target_1, target_2;
+    Utils::postureToTransArray(robot_->posture(rokae::CoordinateType::flangeInBase, ec_), start_1.pos); // 当前位姿
+    // std::array<double, 6UL> point_1 = {0.4, 0.0, 0.3, 3.14154, 0.0, 3.14154}; // 第一个点 .待调试
+    // std::array<double, 6UL> point_2 = {0.5, 0.1, 0.2, 3.14154, 0.0, 3.14154}; // 第二个点 .待调试
+    Utils::postureToTransArray(point_1, target_1.pos); // 目标位姿1
+    Utils::postureToTransArray(point_2, target_2.pos); // 目标位姿2
+
+    RCLCPP_INFO(node_->get_logger(), "\n--- 向下垂直移动 !---.");
+    rtCon_->MoveL(0.03, start_1, target_1);
+    RCLCPP_INFO(node_->get_logger(), "--- 已到达point_1 ---\n\n.");
+
+    Utils::postureToTransArray(robot_->posture(rokae::CoordinateType::flangeInBase, ec_), start_2.pos); // 当前位姿
+    rtCon_->MoveL(0.03, start_2, target_2);
+    RCLCPP_INFO(node_->get_logger(), "--- 已到达point_2 ---\n\n.");
+
+    rtCon_->stopMove();
+    robot_->setMotionControlMode(rokae::MotionControlMode::RtCommand, ec_);
+}
+
+void RobotController::wangliuwei_exp_2(const std::array<double, 6>& point_3)
+{
+    CartesianPosition start, target;
+    Utils::postureToTransArray(robot_->posture(rokae::CoordinateType::flangeInBase, ec_), start.pos); // 当前位姿
+    // std::array<double, 6UL> point_1 = {0.4, 0.0, 0.3, 3.14154, 0.0, 3.14154}; // 第一个点 .与上个函数对应的第一个点一样
+    Utils::postureToTransArray(point_3, target.pos); // 目标位姿
+
+    RCLCPP_INFO(node_->get_logger(), "\n--- 从point_2返回point_3 !---.");
+    rtCon_->MoveL(0.03, start, target);
+
+    rtCon_->stopMove();
+    robot_->setMotionControlMode(rokae::MotionControlMode::RtCommand, ec_);
+}
+
+
+
 
 
 /** 
@@ -586,7 +629,7 @@ void RobotController::usr_rt_cartesian_v_control(
             // const int trigger_count = 15000; // 假设1ms周期,5000次 = 5秒
             // bool time_triggered = false; // 防止重复触发
 
-            const double FORCE_THRESHOLD = 40.0; // 力触发阈值，单位：N
+            const double FORCE_THRESHOLD = 60.0; // 力触发阈值，单位：N
 
             // ------------------------------------------------机械臂控制循环回调函数--------------------------------------------------------
             std::function<CartesianPosition(void)> callback = [&, this]() -> CartesianPosition {

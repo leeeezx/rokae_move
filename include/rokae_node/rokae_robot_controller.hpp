@@ -46,6 +46,10 @@ public:
 
     void move_command(const std::array<double, 6UL> &car_vec, double velocity);
     void move_init();
+
+    void wangliuwei_exp_1(const std::array<double, 6>& point_1, const std::array<double, 6>& point_2);
+    void wangliuwei_exp_2(const std::array<double, 6>& point_3);
+
     void cartesian_impedance_control(double air_dist, double cruise_dist, double decel_dist, double target_speed, double gamma_deg);
     void usr_cartesian_force_control(double desired_force_z, double first_time, double second_time);
     void usr_rt_cartesian_control(double first_time, double second_time);

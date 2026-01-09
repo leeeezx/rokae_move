@@ -123,6 +123,30 @@ void Rokae_Move::setup_ros_communications()
     this->declare_parameter("gamma_angle", 10.00,
         floatDesc("对角线Z-Y平面角度（度，0=Y轴负方向，90=Z轴负方向）", 0.00, 90.00, 0.01));
 
+    // 王刘伟实验参数 - point_1
+    this->declare_parameter("wlw_point1_x", 0.45, floatDesc("point_1 X坐标（米）", 0.0, 1.0, 0.001));
+    this->declare_parameter("wlw_point1_y", 0.0, floatDesc("point_1 Y坐标（米）", -1.0, 1.0, 0.001));
+    this->declare_parameter("wlw_point1_z", 0.45, floatDesc("point_1 Z坐标（米）", 0.0, 1.0, 0.001));
+    this->declare_parameter("wlw_point1_roll", 3.14154, floatDesc("point_1 Roll（弧度）", -3.1416, 3.1416, 0.00001));
+    this->declare_parameter("wlw_point1_pitch", 0.0, floatDesc("point_1 Pitch（弧度）", -3.1, 3.1, 0.1));
+    this->declare_parameter("wlw_point1_yaw", 3.14154, floatDesc("point_1 Yaw（弧度）", -3.1416, 3.1416, 0.00001));
+    
+    // 王刘伟实验参数 - point_2
+    this->declare_parameter("wlw_point2_x", 0.45, floatDesc("point_2 X坐标（米）", 0.0, 1.0, 0.001));
+    this->declare_parameter("wlw_point2_y", 0.05, floatDesc("point_2 Y坐标（米）", -1.0, 1.0, 0.001));
+    this->declare_parameter("wlw_point2_z", 0.40, floatDesc("point_2 Z坐标（米）", 0.0, 1.0, 0.001));
+    this->declare_parameter("wlw_point2_roll", 3.14154, floatDesc("point_2 Roll（弧度）", -3.1416, 3.1416, 0.00001));
+    this->declare_parameter("wlw_point2_pitch", 0.0, floatDesc("point_2 Pitch（弧度）", -3.1, 3.1, 0.1));
+    this->declare_parameter("wlw_point2_yaw", 3.14154, floatDesc("point_2 Yaw（弧度）", -3.1416, 3.1416, 0.00001));
+
+    this->declare_parameter("wlw_point3_x", 0.45, floatDesc("point_1 X坐标（米）", 0.0, 1.0, 0.001));
+    this->declare_parameter("wlw_point3_y", 0.0, floatDesc("point_1 Y坐标（米）", -1.0, 1.0, 0.001));
+    this->declare_parameter("wlw_point3_z", 0.5, floatDesc("point_1 Z坐标（米）", 0.0, 1.0, 0.001));
+    this->declare_parameter("wlw_point3_roll", 3.14154, floatDesc("point_1 Roll（弧度）", -3.1416, 3.1416, 0.00001));
+    this->declare_parameter("wlw_point3_pitch", 0.0, floatDesc("point_1 Pitch（弧度）", -3.1, 3.1, 0.1));
+    this->declare_parameter("wlw_point3_yaw", 3.14154, floatDesc("point_1 Yaw（弧度）", -3.1416, 3.1416, 0.00001));
+    
+
     // 订阅键盘输入
     keyborad = this->create_subscription<std_msgs::msg::String>("/keystroke", 10, std::bind(&Rokae_Move::keyborad_callback, this, std::placeholders::_1));
 
@@ -287,6 +311,31 @@ void Rokae_Move::keyborad_callback(const std_msgs::msg::String::SharedPtr msg)
     double gamma_angle = this->get_parameter("gamma_angle").as_double();
 
     double hold_duration;
+
+    std::array<double, 6> wlw_point1 = {
+    this->get_parameter("wlw_point1_x").as_double(),
+    this->get_parameter("wlw_point1_y").as_double(),
+    this->get_parameter("wlw_point1_z").as_double(),
+    this->get_parameter("wlw_point1_roll").as_double(),
+    this->get_parameter("wlw_point1_pitch").as_double(),
+    this->get_parameter("wlw_point1_yaw").as_double()
+    };
+    std::array<double, 6> wlw_point2 = {
+        this->get_parameter("wlw_point2_x").as_double(),
+        this->get_parameter("wlw_point2_y").as_double(),
+        this->get_parameter("wlw_point2_z").as_double(),
+        this->get_parameter("wlw_point2_roll").as_double(),
+        this->get_parameter("wlw_point2_pitch").as_double(),
+        this->get_parameter("wlw_point2_yaw").as_double()
+    };
+    std::array<double, 6> wlw_point3 = {
+        this->get_parameter("wlw_point3_x").as_double(),
+        this->get_parameter("wlw_point3_y").as_double(),
+        this->get_parameter("wlw_point3_z").as_double(),
+        this->get_parameter("wlw_point3_roll").as_double(),
+        this->get_parameter("wlw_point3_pitch").as_double(),
+        this->get_parameter("wlw_point3_yaw").as_double()
+    };
     
     // 收到键盘消息
     RCLCPP_INFO(this->get_logger(), "收到键盘按下的消息---%s", msg->data.c_str());
@@ -342,6 +391,14 @@ void Rokae_Move::keyborad_callback(const std_msgs::msg::String::SharedPtr msg)
         break;
     case 't': // 用于测试布尔原子变量是否可以传递进机器人回调函数中
         robot_controller_->usr_rt_stationary_control(hold_duration = 20);
+        break;
+    case '1':
+        RCLCPP_INFO(this->get_logger(), "启动王刘伟实验1");
+        robot_controller_->wangliuwei_exp_1(wlw_point1, wlw_point2);
+        break;
+    case '2':
+        RCLCPP_INFO(this->get_logger(), "启动王刘伟实验2");
+        robot_controller_->wangliuwei_exp_2(wlw_point3);
         break;
     default:
         RCLCPP_INFO(this->get_logger(), "你在狗叫什么");

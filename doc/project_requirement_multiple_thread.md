@@ -1,108 +1,118 @@
 # 项目实施计划书：Rokae 机械臂 ROS 2 节点多线程实时控制重构
 
+## 必须严格遵守的要求
+### SDK函数调用约束
+**重构时必须严格遵守以下 SDK 嵌套规则，禁止变更位置：**
+
+| 约束项 | 位置要求 | 说明 |
+|--------|----------|------|
+| `startReceiveRobotState()` | `startLoop` 之前 | 参数需预先配置 |
+| `getStateData()` | callback **内部** | 仅在控制回调中调用 |
+| `is_control_running_` (原子标志位) | **类成员变量** | **严禁使用局部变量**。用于跨线程同步状态。 |
+| `output.setFinished()` | callback 内部，轨迹结束时 | 标记轨迹结束，随后需手动设置 `is_control_running_ = false` |
+| 退出清理序列 (`stopLoop` -> `stopMove`) | **主线程**定时器回调中 | **严禁在 SDK 回调线程中直接调用**。必须通过状态监测异步执行。 |
+
 ## 1. 项目背景与目标
-**现状**：机械臂控制程序运行在 PREEMPT_RT 内核上，作为独立 ROS 2 节点。SDK 使用 `setControlLoop` 接口以 1000Hz (1ms) 频率发送指令。
-**问题**：当前单线程模型下，SDK 高频回调阻塞主线程，导致 ROS 执行器无法调度，造成外部传感器 (Sensor) 和键盘 (Keyboard) 话题通讯阻塞。
-**目标**：重构控制节点架构，实现 1000Hz 控制回路与 ROS 通讯回路分离。确保在 `startLoop(false)` 非阻塞模式下，控制线程与 ROS 接收线程并行运行，解决通讯阻塞。
+**现状**：当前控制逻辑中，`usr_rt_cartesian_v_control` 函数内包含 `while(stopManually.load())` 死循环，导致主线程阻塞，无法响应 ROS 话题（传感器、键盘）。
+**问题**：
+1.  **阻塞问题**：主线程无法执行 `rclcpp::spin()`，无法与传感器ROS2包的外部传感器数据topic进行通讯。
+2.  **生命周期漏洞**：若直接去除 `while`，局部变量 `stopManually` 会被销毁，导致 SDK 回调访问非法内存（Segfault）。
+3.  **清理时机**：非阻塞模式下，函数立即返回，无法在函数末尾直接执行清理。
+
+**目标**：重构为 **"非阻塞启动 + 状态机监控"** 模式。确保控制线程独立运行，主线程负责 ROS 通讯和生命周期管理。
 
 ## 2. 系统架构设计
-采用 **"ROS 主线程 + SDK 后台线程 + 自旋锁共享内存"** 架构。
+采用 **"ROS 主线程 (通讯+监控) + SDK 后台线程 (控制) + 共享内存"** 架构。
 
-1.  **主线程 (Main Thread / ROS Thread)**：
-    *   运行 `rclcpp::spin(node)`。
-    *   负责实时接收 Sensor (400Hz) 和 Keyboard Topic 数据。
-    *   收到数据后，获取自旋锁并写入共享内存。
+1.  **主线程 (Main Thread)**：
+    *   **通讯**：运行 `rclcpp::spin()`，实时接收 Sensor (400Hz) 和 Keyboard Topic。
+    *   **写入**：收到传感器数据后，写入无锁共享内存。
+    *   **监控**：通过低频定时器 (e.g., 20Hz) 监控 SDK 线程状态。若发现运动结束，执行清理序列。
 2.  **SDK 线程 (Background RT Thread)**：
-    *   由 `robot_ptr->startLoop(false)` 启动。
     *   以 1000Hz 频率执行控制回调。
-    *   执行 **"Try-Lock + ZOH (零阶保持)"** 策略读取传感器数据并计算控制律。
-3.  **共享内存 (Shared Memory)**：
-    *   使用 `std::atomic_flag` 实现自旋锁，保护力控数据与时间戳。
+    *   使用 **"Try-Get"** 策略读取共享内存中的传感器数据。
+    *   运动结束时，仅标记状态位，**不执行**清理函数。
+3.  **数据共享**：
+    *   使用 `std::atomic_flag` 实现自旋锁，保护力控数据。
 
-## 3. 详细实施步骤
+## 3. 详细实施步骤 (按文件划分)
 
-### 3.1 数据结构定义
-实现基于 `std::atomic_flag` 的轻量级共享存储类，禁止使用 `std::mutex`。
+### 3.1 新增：`include/rokae_node/sensor_shared_data.hpp`
+**任务**：定义线程安全的共享数据结构。
+*   **内容**：
+    *   结构体 `SensorSharedData`。
+    *   成员：`std::array<double, 6> force_torque`，`std::chrono::steady_clock::time_point timestamp`，`std::atomic_flag lock`。
+    *   方法 `update(...)`: 自旋获取锁 -> 写入数据 -> 释放锁。
+    *   方法 `try_get(...)`: `test_and_set` 尝试获取锁 -> 成功则拷贝并返回 true -> 失败返回 false (实现 ZOH 零阶保持)。
 
-*   **数据成员**：
-    *   `std::array<double, 6> force_torque`: 力/力矩数据。
-    *   `std::chrono::steady_clock::time_point timestamp`: 数据接收时间戳（用于看门狗）。
-*   **方法**：
-    *   `void update(...)`: 自旋等待锁，写入数据与当前时间。
-    *   `bool try_get(...)`: 尝试获取锁 (`test_and_set`)。成功则拷贝数据并清除锁；失败则返回 false（不等待）。
+### 3.2 修改：`include/rokae_node/rokae_move_node.hpp`
+**任务**：增加监控定时器和共享数据对象。
+*   **新增成员**：
+    *   `SensorSharedData sensor_data_;` (实例化共享数据)
+    *   `rclcpp::TimerBase::SharedPtr status_monitor_timer_;` (状态监控定时器)
+*   **修改函数**：
+    *   将 `z_force_callback` 替换为 `void sensor_callback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);`
+    *   新增 `void monitor_loop_callback();` (用于检测机器人是否需要清理)
 
-### 3.2 机械臂节点类改造 (RobotNode)
-在 `include/rokae_node/rokae_move_node.hpp` 和对应的 cpp 文件中修改。
+### 3.3 修改：`src/rokae_move_node.cpp`
+**任务**：实现 ROS 数据转发与状态监控。
+*   **构造函数**：
+    *   初始化 `RobotController` 时，将 `&sensor_data_` 指针传递给它。
+    *   创建 `status_monitor_timer_` (建议 20Hz/50ms)，绑定到 `monitor_loop_callback`。
+    *   订阅 `/force_sensor_x` 等话题，绑定到 `sensor_callback`。
+*   **`sensor_callback`**：
+    *   解析 ROS 消息。
+    *   调用 `sensor_data_.update(...)` 写入最新数据。
+*   **`monitor_loop_callback`**：
+    *   检查 `robot_controller_->is_running()` 是否为 `false`。
+    *   检查 `robot_controller_->needs_cleanup()` 是否为 `true`（防止重复清理）。
+    *   若满足条件：调用 `robot_controller_->stop_control()` 并重置标志位。
 
-1.  **新增成员**：实例化上述共享存储类对象 `sensor_data_buffer_`。
-2.  **ROS 回调 (`sensor_callback`)**：
-    *   接收 `geometry_msgs::msg::WrenchStamped`。
-    *   调用 `sensor_data_buffer_.update()` 写入最新数据。
-3.  **SDK 回调 (`control_loop`)**：
-    *   **读取策略**：调用 `try_get()`。
-        *   **成功**：更新本地缓存 `current_force`，检查时间戳是否超时（阈值 50ms）。若超时，触发急停保护。
-        *   **失败 (锁忙) 或 无新数据**：维持 `current_force` 不变 (ZOH)。
-    *   **控制计算**：基于 `current_force` 计算阻抗控制律。
-    *   **约束**：禁止 `sleep`，计算耗时 < 1ms。
+### 3.4 修改：`include/rokae_node/rokae_robot_controller.hpp`
+**任务**：提升状态标志位为成员变量，提供清理接口。
+*   **新增成员**：
+    *   `SensorSharedData* shared_data_;` (持有共享数据指针)
+    *   `std::atomic<bool> is_control_running_{false};` (替代原局部变量 `stopManually`)
+    *   `std::atomic<bool> cleanup_needed_{false};` (通知主线程进行清理)
+*   **新增/修改接口**：
+    *   构造函数接收 `SensorSharedData*`。
+    *   `bool is_running() const`。
+    *   `bool needs_cleanup() const`。
+    *   `void stop_control()` (封装 stopLoop, stopMove, stopReceiveRobotState)。
 
-### 3.3 主函数 (`main`) 重构
-修改 `src/rokae_move_node.cpp`：
-
-1.  初始化 SDK 与 ROS。
-2.  调用 `robot->setControlLoop(...)` 绑定回调。
-3.  调用 `robot->startLoop(false)` 启动后台控制线程。
-4.  调用 `rclcpp::spin(node)` 在主线程处理 ROS 消息。
-5.  程序退出前调用 `stopLoop()` 和 `stopMove()`。
+### 3.5 修改：`src/rokae_robot_controller.cpp`
+**任务**：重构控制函数为非阻塞模式。
+*   **`usr_rt_cartesian_v_control` 重构**：
+    1.  **移除** `while(stopManually.load())` 及其后的清理代码。
+    2.  设置 `is_control_running_ = true` 和 `cleanup_needed_ = true`。
+    3.  调用 `rtCon_->startLoop(false)`。
+    4.  **立即 return** (非阻塞)。
+*   **SDK 回调 (Lambda) 修改**：
+    1.  **数据读取**：使用 `shared_data_->try_get(...)` 替换原有逻辑。
+    2.  **退出条件**：当轨迹结束 (`index >= size`) 时：
+        *   执行 `output.setFinished()`。
+        *   设置 `is_control_running_ = false`。
+        *   **绝对不要**在这里调用 `stopLoop`。
+*   **新增 `stop_control` 实现**：
+    1.  执行 `rtCon_->stopLoop()`。
+    2.  执行 `rtCon_->stopMove()`。
+    3.  执行 `robot_->stopReceiveRobotState()`。
+    4.  重置相关的 Timer (如果有)。
+    5.  打印 "Control Loop Stopped & Cleaned up"。
 
 ## 4. 关键配置要求
-
-### 4.1 QoS 配置变更 (强制)
-全链路修改为 **BEST_EFFORT** 以降低延迟。
-*   **Action**: 修改 Robot (Subscriber), Sensor (Publisher), Keyboard (Publisher) 的 QoS 配置。
-    *   Reliability: `RMW_QOS_POLICY_RELIABILITY_BEST_EFFORT`
-    *   Durability: `RMW_QOS_POLICY_DURABILITY_VOLATILE`
-    *   History: `KEEP_LAST`, Depth: 1
-
-### 4.2 编译与链接
-*   确保 `CMakeLists.txt` 链接 `pthread`。
+*   **QoS**: 全链路 (Sensor -> Robot) 使用 **BEST_EFFORT** + **VOLATILE**。
+*   **编译**: 确保 CMake 链接 `pthread`。
 
 ## 5. 验收测试标准
-1.  **功能验证**：在机械臂运动期间，`ros2 topic hz /force_sensor_x` 显示稳定频率，且机械臂能随传感器数值变化做出实时阻抗响应。
-2.  **实时性**：控制回调周期抖动 < 0.1ms。
-3.  **安全性**：断开传感器连接，机械臂应在 50ms 内检测到超时并停止运动。
-
-## 6. 附录：Sensor 节点接口说明 (补充信息)
-本项目的 Force Sensor 节点（`sensor` 包）提供以下接口，Robot 控制节点需据此进行适配：
-
-*   **发布话题 (Topics)**:
-    *   `/force_sensor_x`
-    *   `/force_sensor_y`
-    *   `/force_sensor_z`
-*   **消息类型 (Message Type)**: `geometry_msgs/msg/WrenchStamped`
-    *   **数据单位**：牛顿 (N)
-    *   **数据填充**：各话题仅填充对应轴的力数据。例如 `/force_sensor_x` 仅填充 `msg.wrench.force.x`，其他轴为 0。
-*   **QoS 配置现状**:
-    *   Sensor 节点目前使用默认 QoS 配置：`History=KEEP_LAST`, `Depth=10`, `Reliability=RELIABLE`, `Durability=VOLATILE`。
-    *   **注意**：Robot 节点的订阅端应配置为 `RELIABLE` 以匹配当前 Sensor 设置，或者修改 Sensor 源码为 `BEST_EFFORT` 以优化实时性（正如第 4.1 节建议）。
-*   **硬件端口映射**:
-    *   X轴: `/dev/ttyUSB0`
-    *   Y轴: `/dev/ttyUSB1`
-    *   Z轴: `/dev/ttyUSB2`
-
-## 7. 附录：Keyboard 节点接口说明 (补充信息)
-本项目的键盘控制节点（`keyboard` 包）提供以下接口，Robot 控制节点需据此进行适配以接收实时指令：
-
-*   **节点名称 (Node Name)**: `input_keyboard`
-*   **发布话题 (Topics)**:
-    *   `keystroke`
-*   **消息类型 (Message Type)**: `std_msgs/msg/String`
-    *   **数据含义**: 包含用户在终端按下的单个字符（如 `w`, `a`, `s`, `d` 等），用于控制机械臂运动或切换模式。
-*   **架构特点**:
-    *   采用 **“主线程读取 + 子线程通讯”** 的架构。主线程通过 `tty` 原始模式阻塞读取终端输入，确保按键响应的低延迟；子线程运行 `rclpy.spin` 维持 ROS 上下文。
-    *   **注意**: 这是一个 Python 节点，但在 ROS 2 通讯层面与 C++ 节点兼容。
-*   **QoS 配置现状**:
-    *   代码中使用 `create_publisher(String, "keystroke", 10)`，即默认 QoS：`Reliability=RELIABLE`, `Durability=VOLATILE`, `Depth=10`。
-    *   **适配建议**: Robot 节点的订阅端建议配置为 `RELIABLE`，以防止指令丢失。
+1.  **非阻塞验证**：启动控制后，主线程仍能响应键盘 `keystroke` 话题，且终端不卡死。
+2.  **清理验证**：轨迹运行结束后，程序应自动打印 "Control Loop Stopped & Cleaned up"，且机械臂停止在目标位置，无报错。
+3.  **实时响应**：在运动过程中，人为触发传感器力阈值，机械臂应能立即响应（切换轨迹或急停）。
 
 ## 8. 进度检查与更新
 每次修改代码后，在此处以任务列表形式记录进度：
+- [ ] 3.1 创建 SensorSharedData
+- [ ] 3.4 修改 RobotController 头文件
+- [ ] 3.2 修改 Rokae_Move 头文件
+- [ ] 3.5 重构 RobotController 源文件 (核心逻辑)
+- [ ] 3.3 修改 Rokae_Move 源文件 (连接逻辑)

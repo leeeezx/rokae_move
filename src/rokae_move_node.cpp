@@ -411,17 +411,17 @@ void Rokae_Move::monitor_loop_callback()
     }
 }
 
-// 让这个函数去检查力阈值，然后让callback来调用这个函数，这个函数应该返回一个bool。              未使用
-bool Rokae_Move::z_force_check(double force_threshold)
-{
-    // RCLCPP_INFO(this->get_logger(),"进入z_force_check");
-    constexpr double DEFAULT_FORCE_THRESHOLD = 2.0;
-    const double threshold = force_threshold > 0.0 ? force_threshold : DEFAULT_FORCE_THRESHOLD;
-    // RCLCPP_INFO(this->get_logger(),"开始判断");
-    bool is_triggered = latest_force_z_.load() >= threshold;
-    // RCLCPP_INFO(this->get_logger(), "调用z_force_check成功， 当前力: %.2f N, 阈值: %.2f N", latest_force_z_.load(), threshold);
-    return is_triggered;
-}
+// // 让这个函数去检查力阈值，然后让callback来调用这个函数，这个函数应该返回一个bool。              未使用
+// bool Rokae_Move::z_force_check(double force_threshold)
+// {
+//     // RCLCPP_INFO(this->get_logger(),"进入z_force_check");
+//     constexpr double DEFAULT_FORCE_THRESHOLD = 2.0;
+//     const double threshold = force_threshold > 0.0 ? force_threshold : DEFAULT_FORCE_THRESHOLD;
+//     // RCLCPP_INFO(this->get_logger(),"开始判断");
+//     bool is_triggered = latest_force_z_.load() >= threshold;
+//     // RCLCPP_INFO(this->get_logger(), "调用z_force_check成功， 当前力: %.2f N, 阈值: %.2f N", latest_force_z_.load(), threshold);
+//     return is_triggered;
+// }
 
 
 /**

@@ -67,6 +67,38 @@ void RobotController::stop_control() {
     RCLCPP_INFO(node_->get_logger(), "Control Loop Stopped & Cleaned up");
 }
 
+/**
+ *  @brief 回到初始位置。自动回到设定的初始位置，如果初始位置定义改变，需要修改此函数的 init_point
+ */
+void RobotController::move_init()
+{
+    if (is_control_running_.load()) {
+        RCLCPP_WARN(node_->get_logger(), "控制器正在运行中，忽略 move_init 请求");
+        return;
+    }
+
+    try
+    {
+        CartesianPosition start, target;
+        Utils::postureToTransArray(robot_->posture(rokae::CoordinateType::flangeInBase, ec_), start.pos); // 当前位姿
+        // std::array<double, 6UL> init_point = {0.45, 0.0, 0.5, 3.14154, 0.0, 3.14154}; // 原始起始位姿
+        std::array<double, 6UL> init_point = {0.45, 0.0, 0.58, 3.14154, 0.0, 3.14154};
+        Utils::postureToTransArray(init_point, target.pos); // 将初始位姿设置为目标位姿
+
+        RCLCPP_INFO(node_->get_logger(), "\n--- 正在归位 !---.");
+        rtCon_->MoveL(0.05, start, target);
+        RCLCPP_INFO(node_->get_logger(), "--- 已回到初始位置 ---\n\n.");
+
+        rtCon_->stopMove();
+        robot_->setMotionControlMode(rokae::MotionControlMode::RtCommand, ec_);
+
+
+    }
+    catch (const std::exception &e)
+    {
+        RCLCPP_ERROR(node_->get_logger(), "move_init 异常: %s", e.what());
+    }
+}
 
 /**
  * @brief 实时模式纯轨迹控制，速度可控

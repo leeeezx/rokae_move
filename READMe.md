@@ -1,90 +1,102 @@
-# 珞石七轴机械臂控制系统
+# Rokae 机械臂 ROS 2 实时控制节点 (多线程重构版)
 
-## 项目介绍
-本项目用于控制七轴珞石机械臂，实现笛卡尔空间的运动控制、力控制和阻抗控制等功能。项目基于ROS 2开发，提供了机械臂的轨迹规划、力控制和实时控制等功能。
+本项目是针对 Rokae xMateErPro 机械臂开发的 ROS 2 控制节点。
 
-如果需要接收外置传感器力信息，请参考sensor仓库中的内容，或者本仓库中src/archive/test...ros.py
+**当前分支 (`refactor`) 已完成核心架构的 v2.0 重构**，采用了 **"ROS 主线程 (通讯+监控) + SDK 后台线程 (控制) + 共享内存"** 的多线程设计模式，解决了原单线程架构下的阻塞问题，实现了高频实时控制与 ROS 通讯的并发安全。
 
-### 主要功能
-- 笛卡尔空间轨迹规划与控制
-- 力控制与阻抗控制
-- 实时运动控制
-- 多段轨迹生成（包括贝塞尔曲线、线性轨迹等）
+详细的重构设计与架构说明请参考：
+👉 **[多线程需求与架构设计文档](doc/project_requirement_multiple_thread.md)**
 
-## 环境要求
-- Ubuntu系统（推荐Ubuntu 20.04或更高版本）
-- ROS 2（项目基于ROS 2开发）
-- Eigen3
-- C++17标准
-- 珞石机械臂SDK（xCoreSDK和xMateModel库）
+## 核心特性
+
+*   **多线程并发架构**：主线程负责 ROS 话题通讯与状态监控，后台线程负责 SDK 1kHz 实时控制。
+*   **非阻塞交互**：控制循环运行时，主线程仍能实时响应键盘指令和传感器数据。
+*   **共享内存通讯**：利用无锁（Lock-free）或自旋锁机制在 ROS 回调与实时控制线程间传递高频力控数据。
+*   **安全状态机**：具备完善的生命周期管理，支持力阈值触发后的自动轨迹切换与安全停止。
+
+## 环境依赖
+
+*   **操作系统**: Linux (推荐 Ubuntu 22.04 / 20.04)
+*   **ROS 2**: Humble / Foxy
+*   **硬件依赖**:
+    *   Rokae xMateErPro 机械臂 (需配置 IP: 192.168.0.160)
+    *   六维力传感器 (发布话题 `/force_sensor_x`)
+*   **第三方库**:
+    *   Rokae xCore SDK (已集成在 `lib/` 和 `include/` 中)
+    *   Eigen3
+
+## 编译指南
+
+```bash
+# 进入工作空间根目录
+cd <your_colcon_workspace>
+
+# 编译项目
+colcon build --packages-select rokae_move
+
+# source 环境
+source install/setup.bash
+```
+
+## 运行指南
+
+由于涉及到实时网络通讯（EtherCAT/TCP）和线程优先级设置，建议使用 `sudo` 或配置好实时权限运行。
+
+```bash
+# 启动控制节点
+ros2 run rokae_move rokae_move_node
+```
+
+### 运行时交互
+
+节点启动后会订阅 `/keystroke` 话题接收键盘指令。推荐配合键盘发布节点使用，或手动发布消息：
+
+```bash
+ros2 topic pub --once /keystroke std_msgs/msg/String "data: 'v'"
+```
+
+## 使用方法 (目前支持的指令)
+
+在重构阶段，为了确保安全，仅保留并验证了以下核心控制功能。按下对应键盘按键即可触发：
+
+| 按键 | 功能描述 | 对应函数 |
+| :---: | :--- | :--- |
+| **`v`** | **Z轴速度控制测试**<br>执行“空中加速 -> 匀速侵入 -> 减速缓冲 -> 停止”的四阶段 Z 轴运动。 | `usr_rt_cartesian_v_control_z` |
+| **`b`** | **Z-Y 复合轨迹控制**<br>先执行 Z 轴下探，接触或到位后衔接 Y 轴水平划动。支持力控触发回退（Z轴受力 > 40N 时自动抬起）。 | `usr_rt_cartesian_v_control` |
+
+> ⚠️ **注意**：其他按键（如 `q`, `w`, `e`, `r`, `n` 等）在当前分支均处于 **禁用/维护** 状态，触发时会打印警告信息。
+
+### 参数配置
+
+可以通过 ROS 2 参数动态调整运动特性（单位：米, 米/秒）：
+
+*   `air_distance` / `y_air_distance`: 加速段距离
+*   `cruise_distance` / `y_cruise_distance`: 匀速段距离
+*   `target_speed` / `y_target_speed`: 期望作业速度
+*   `desired_force_z`: 期望恒力阈值 (目前主要用于触发判断)
 
 ## 项目结构
+
+```text
+D:\CodeProject\rokae_move\
+├── archive/                # 归档的旧代码与实验性代码
+├── build/                  # 编译生成目录
+├── doc/                    # 项目文档
+│   ├── project_requirement_multiple_thread.md  # 核心：多线程重构设计文档
+│   └── ...
+├── example/                # SDK 官方示例代码
+├── external/               # 第三方依赖库 (Eigen 等)
+├── include/                # 头文件目录
+│   └── rokae_node/
+│       ├── rokae_move_node.hpp         # ROS 节点类定义
+│       ├── rokae_robot_controller.hpp  # 机械臂控制类定义
+│       └── trajectory_generator.hpp    # 轨迹生成算法库
+├── lib/                    # 编译链接库 (xCoreSDK 等)
+├── src/                    # 源代码目录
+│   ├── rokae_move_node.cpp             # ROS 节点实现 (主线程逻辑)
+│   ├── rokae_robot_controller.cpp      # 机械臂控制实现 (SDK线程逻辑)
+│   └── trajectory_generator.cpp        # 轨迹生成算法实现
+├── CMakeLists.txt          # 构建脚本
+├── package.xml             # ROS 包描述文件
+└── README.md               # 项目说明文档
 ```
-rokae_move/
-├── src/                   # 源代码目录
-│   ├── archive/          # 归档文件，一般是废弃的或者不再使用的程序文件
-│   ├── test_impedance_force_node.cpp  # 机械臂力控制与阻抗控制实现
-│   ├── trajectory_verification.cpp    # 轨迹验证程序
-│   └── trajectory_verifi_plot.py      # 轨迹数据可视化脚本
-├── include/               # 头文件目录
-│   └── rokae_move/       # 项目头文件
-│       ├── base.h        # 基础定义
-│       ├── data_types.h  # 数据类型定义
-│       ├── exception.h   # 异常处理
-│       ├── model.h       # 机械臂模型
-│       ├── motion_control_rt.h  # 实时运动控制
-│       ├── planner.h     # 路径规划
-│       ├── print_helper.hpp  # 打印辅助函数
-│       ├── robot.h       # 机械臂控制接口
-│       └── utility.h     # 工具函数
-├── example/               # 示例代码目录
-│   ├── cartesian_impedance_control.cpp  # 笛卡尔空间阻抗控制示例
-│   ├── cartesian_s_line.cpp             # 笛卡尔空间直线轨迹示例
-│   └── trajectoryPoint.md               # 轨迹点使用说明
-├── lib/                   # 库文件目录
-├── external/              # 外部依赖目录
-├── build/                 # 构建目录
-├── CMakeLists.txt         # CMake构建配置
-└── package.xml            # ROS 2包信息
-```
-
-## 编译与安装
-1. 确保已安装所有依赖项
-2. 克隆本项目到ROS 2工作空间的src目录下
-3. 返回工作空间根目录，执行编译命令：
-   ```bash
-   colcon build --packages-select rokae_move
-   ```
-4. 编译完成后，请先加载环境变量：
-   ```bash
-   source install/setup.bash
-   ```
-
-## 使用方法
-### 运行力控与阻抗控制节点
-```bash
-ros2 run rokae_move test_impedance_force_node
-```
-
-### 轨迹测试
-项目提供了多种轨迹规划方法，可参考`example/trajectoryPoint.md`进行测试，包括：
-- 垂直向下-水平向右的轨迹
-- 不同深度和期望力的组合测试
-
-## 主要接口
-项目提供的主要功能接口包括：
-- 笛卡尔空间运动控制
-- 力控制
-- 阻抗控制
-- 实时轨迹生成
-
-具体接口使用方法请参考源代码注释和示例。
-
-## 归档内容
-archive目录包含了历史版本的代码或不再使用的程序文件，仅供参考，不建议在实际应用中使用。
-
-## 许可证
-待定
-
-## 贡献者
-- 乐正祥（主要开发者）

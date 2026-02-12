@@ -45,3 +45,28 @@
 
 ## 视觉/外部检索记录
 - 本轮未使用图片/PDF/网页检索。
+
+## 方案可行性全面评估（2026-02-12）
+
+### 一、与 PRD“现状/问题”的映射结论
+| PRD 问题 | 方案对应机制 | 可行性结论 |
+|------|------|------|
+| `usr_rt_cartesian_v_control` 内阻塞等待导致回调长期占用 | 控制函数非阻塞返回 + 监控定时器异步收尾 | 可行，可直接消除阻塞等待路径 |
+| 去掉 while 后局部变量生命周期失效风险 | 局部状态改为类成员原子变量（`is_control_running_` / `cleanup_needed_`） | 可行，可消除悬垂访问 |
+| 非阻塞后函数末尾无法清理 | 主线程回调执行 `stopLoop -> stopMove -> stopReceiveRobotState` | 可行，且符合 SDK 约束 |
+
+### 二、约束一致性检查
+- `startReceiveRobotState()` 在 `startLoop` 之前：方案保持一致。
+- `getStateData()` 位于控制回调内部：方案保持一致。
+- `output.setFinished()` 位于控制回调内：方案保持一致。
+- 清理动作不在 SDK 回调线程执行：方案明确迁移到主线程监控回调，方向正确。
+
+### 三、落地风险与必要修正
+1. 当前代码未显式 callback group 隔离；仅有 `MultiThreadedExecutor` 但无分组策略，需补齐。
+2. `package.xml` 目前仅声明 `rclcpp/std_msgs`，而代码使用了 `geometry_msgs` 与参数描述类型，依赖声明需完善。
+3. QoS 当前多为深度 `10` 默认配置，未落实 BEST_EFFORT + VOLATILE，需按链路统一。
+4. `stop_control()` 需保证幂等与异常安全，防止监控回调重复触发清理。
+
+### 四、最终判断
+- 在补齐上述前置条件后，阶段 3~5 的既定方案可以解决 PRD 中“现状/问题”描述的核心矛盾。
+- 该方案在现有代码结构上可最小侵入演进，不要求推翻现有轨迹生成与控制逻辑。

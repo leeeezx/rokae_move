@@ -1,4 +1,4 @@
-# 项目实施计划书：Rokae 机械臂 ROS 2 节点多线程实时控制重构
+# 项目实施计划书：Rokae 机械臂 ROS 2 节点多线程实时控制重构（事实基线 + 目标方案）
 
 ## 必须严格遵守的要求
 ### SDK函数调用约束
@@ -12,16 +12,26 @@
 | `output.setFinished()` | callback 内部，轨迹结束时 | 标记轨迹结束，随后需手动设置 `is_control_running_ = false` |
 | 退出清理序列 (`stopLoop` -> `stopMove`) | **主线程**定时器回调中 | **严禁在 SDK 回调线程中直接调用**。必须通过状态监测异步执行。 |
 
+### 当前实现偏差清单（代码核查结论）
+以下条目是“当前代码与目标约束/方案之间的差距”，用于指导后续重构，非已实现能力。
+
+1. `usr_rt_cartesian_v_control` 仍包含阻塞等待：`while(stopManually.load())`。
+2. `stopManually` 当前是局部变量，尚未提升为类成员状态变量（如 `is_control_running_`）。
+3. 清理流程当前在控制函数末尾同步执行，尚未迁移到主线程监控回调异步执行。
+4. 监控定时器与状态接口（如 `status_monitor_timer_`、`stop_control()`）尚未实现。
+5. 传感器共享结构（`SensorSharedData`）及对应 `try_get/update` 机制尚未实现。
+6. `MultiThreadedExecutor` 已使用，但尚未明确回调组隔离策略。
+
 ## 1. 项目背景与目标
-**现状**：当前控制逻辑中，`usr_rt_cartesian_v_control` 函数内包含 `while(stopManually.load())` 死循环，导致主线程阻塞，无法响应 ROS 话题（传感器、键盘）。
+**现状**：当前控制逻辑中，`usr_rt_cartesian_v_control` 函数内包含 `while(stopManually.load())` 阻塞等待，导致触发该控制路径的回调线程长期占用，影响 ROS 话题（传感器、键盘）处理时效。
 **问题**：
-1.  **阻塞问题**：主线程无法执行 `rclcpp::spin()`，无法与传感器ROS2包的外部传感器数据topic进行通讯。
+1.  **阻塞问题**：并非 `rclcpp::spin()` 不运行，而是控制回调阻塞后，同回调组内的其他回调会出现处理饥饿，影响与传感器 ROS2 包外部 topic 的通讯时效。
 2.  **生命周期漏洞**：若直接去除 `while`，局部变量 `stopManually` 会被销毁，导致 SDK 回调访问非法内存（Segfault）。
 3.  **清理时机**：非阻塞模式下，函数立即返回，无法在函数末尾直接执行清理。
 
 **目标**：重构为 **"非阻塞启动 + 状态机监控"** 模式。确保控制线程独立运行，主线程负责 ROS 通讯和生命周期管理。
 
-## 2. 系统架构设计
+## 2. 目标系统架构设计（待实现，非当前实现）
 采用 **"ROS 主线程 (通讯+监控) + SDK 后台线程 (控制) + 共享内存"** 架构。
 
 1.  **主线程 (Main Thread)**：
@@ -35,7 +45,7 @@
 3.  **数据共享**：
     *   使用 `std::atomic_flag` 实现自旋锁，保护力控数据。
 
-## 3. 详细实施步骤 (按文件划分)
+## 3. 详细实施步骤（目标改造，按文件划分）
 
 ### 3.1 新增：`include/rokae_node/sensor_shared_data.hpp`
 **任务**：定义线程安全的共享数据结构。
@@ -100,19 +110,11 @@
     4.  重置相关的 Timer (如果有)。
     5.  打印 "Control Loop Stopped & Cleaned up"。
 
-## 4. 关键配置要求
+## 4. 关键配置要求（目标状态）
 *   **QoS**: 全链路 (Sensor -> Robot) 使用 **BEST_EFFORT** + **VOLATILE**。
 *   **编译**: 确保 CMake 链接 `pthread`。
 
-## 5. 验收测试标准
+## 5. 验收测试标准（重构完成后）
 1.  **非阻塞验证**：启动控制后，主线程仍能响应键盘 `keystroke` 话题，且终端不卡死。
 2.  **清理验证**：轨迹运行结束后，程序应自动打印 "Control Loop Stopped & Cleaned up"，且机械臂停止在目标位置，无报错。
 3.  **实时响应**：在运动过程中，人为触发传感器力阈值，机械臂应能立即响应（切换轨迹或急停）。
-
-## 8. 进度检查与更新
-每次修改代码后，在此处以任务列表形式记录进度：
-- [ ] 3.1 创建 SensorSharedData
-- [ ] 3.4 修改 RobotController 头文件
-- [ ] 3.2 修改 Rokae_Move 头文件
-- [ ] 3.5 重构 RobotController 源文件 (核心逻辑)
-- [ ] 3.3 修改 Rokae_Move 源文件 (连接逻辑)

@@ -1,0 +1,63 @@
+# 任务计划：Rokae 实时控制非阻塞重构（基于现状）
+
+## 目标
+在严格遵守 SDK 调用约束的前提下，把当前阻塞式 `usr_rt_cartesian_v_control` 重构为“非阻塞启动 + 主线程监控清理”模式，并同步修订 PRD 使其与代码现状和目标边界一致。
+
+## 当前阶段
+阶段 3
+
+## 分阶段计划
+
+### 阶段 1：现状核实与约束冻结
+- [x] 核对 PRD 中可采信部分（仅“现状”“调用约束”）
+- [x] 对照代码确认阻塞点、线程模型、清理路径
+- [x] 记录与 PRD 其他章节的偏差
+- **状态：** complete
+
+### 阶段 2：计划与文档基线
+- [x] 启用 planning-with-files 并创建持久化计划文件
+- [x] 形成“事实/待实现”分层结论
+- [x] 输出 PRD 修订清单并落地到 `doc/project_requirement_doc.md`
+- **状态：** complete
+
+### 阶段 3：接口改造设计（头文件）
+- [ ] 新增 `SensorSharedData` 结构（共享内存 + try_get）
+- [ ] 在 `RobotController` 增加 `is_control_running_`、`cleanup_needed_`、`stop_control()`、查询接口
+- [ ] 在 `Rokae_Move` 增加 `status_monitor_timer_`、`sensor_callback()`、`monitor_loop_callback()`
+- [ ] 明确回调组策略，避免阻塞影响键盘/传感器回调
+- **状态：** in_progress
+
+### 阶段 4：控制链路重构（源文件）
+- [ ] `usr_rt_cartesian_v_control` 移除阻塞 `while(stopManually)`
+- [ ] 回调内仅 `output.setFinished()` + 状态位切换，不直接做 stop 清理
+- [ ] 主线程定时器检测完成态并执行 `stopLoop -> stopMove -> stopReceiveRobotState`
+- [ ] 接入传感器共享数据读取（try_get，失败走 ZOH）
+- **状态：** pending
+
+### 阶段 5：配置与验收
+- [ ] 明确 QoS（BEST_EFFORT + VOLATILE）并统一链路
+- [ ] 校验 CMake 线程链接策略（按平台与依赖实际需要）
+- [ ] 执行“非阻塞/自动清理/力触发切换”三项验收
+- [ ] 更新 PRD 为“已实现状态”版本
+- **状态：** pending
+
+## 关键问题
+1. 是否要求 `stop_control()` 仅由 ROS 定时器触发，且完全禁止在控制函数异常路径中直接调用？
+2. 传感器输入最终以哪些 topic 为准（当前文档示例 `/force_sensor_x` 等尚未落地）？
+3. 是否需要显式创建独立 callback group 来保证键盘、传感器、监控的并发性？
+
+## 已做决策
+| 决策 | 理由 |
+|------|------|
+| 以“现状+调用约束”为唯一事实基线 | 用户已明确其余内容为历史 AI 推测 |
+| 先构建文件化计划，再进入代码改造 | 任务跨多文件、跨线程、跨文档，需持久化上下文 |
+| 采用“事实层/目标层”双层描述 | 避免把待实现方案误当成现状 |
+
+## 错误记录
+| 错误 | 尝试次数 | 解决 |
+|------|----------|------|
+| 暂无 | 1 | - |
+
+## 备注
+- 每完成一个阶段都要更新状态与偏差。
+- 若出现连续 3 次同类失败，停止重试并向用户升级。

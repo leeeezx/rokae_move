@@ -81,3 +81,10 @@
 - 回调组已显式拆分为键盘/传感器/监控三个 `MutuallyExclusive` callback group，避免互相饥饿。
 - QoS 已落地：传感器链路与实时数据发布改为 `BEST_EFFORT + VOLATILE`；键盘指令保持 `RELIABLE + VOLATILE`。
 - 构建依赖已补齐：`geometry_msgs`、`rcl_interfaces`，并在 `CMakeLists.txt` 增加 `Threads::Threads` 链接。
+
+## PRD 对齐更新（2026-02-13）
+- 已将 `doc/project_requirement_doc.md` 从“目标方案描述”重写为“已实现状态记录”。
+- 文档已明确区分：
+  1. 已完成的代码改造项（非阻塞、监控清理、共享数据、回调组、QoS、依赖）。
+  2. 待实机回填的验收结果（非阻塞验证、自动清理验证、力触发切换验证）。
+- 文档新增当前限制说明：当前仅对接 `/force_sensor_z`，三轴分话题聚合属于后续扩展项。

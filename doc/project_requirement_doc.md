@@ -1,120 +1,122 @@
-# 项目实施计划书：Rokae 机械臂 ROS 2 节点多线程实时控制重构（事实基线 + 目标方案）
+# 项目实施记录书：Rokae 机械臂 ROS 2 实时控制重构（已实现状态）
 
-## 必须严格遵守的要求
-### SDK函数调用约束
-**重构时必须严格遵守以下 SDK 嵌套规则，禁止变更位置：**
+## 文档状态
+- 文档类型：实现对齐文档（非方案草案）
+- 更新日期：2026-02-13
+- 对齐范围：当前仓库代码实现
+- 验收状态：代码改造完成，实机验收待执行
 
-| 约束项 | 位置要求 | 说明 |
-|--------|----------|------|
-| `startReceiveRobotState()` | `startLoop` 之前 | 参数需预先配置 |
-| `getStateData()` | callback **内部** | 仅在控制回调中调用 |
-| `is_control_running_` (原子标志位) | **类成员变量** | **严禁使用局部变量**。用于跨线程同步状态。 |
-| `output.setFinished()` | callback 内部，轨迹结束时 | 标记轨迹结束，随后需手动设置 `is_control_running_ = false` |
-| 退出清理序列 (`stopLoop` -> `stopMove`) | **主线程**定时器回调中 | **严禁在 SDK 回调线程中直接调用**。必须通过状态监测异步执行。 |
+## 必须严格遵守的 SDK 调用约束
+以下约束继续作为后续迭代的硬性边界：
 
-### 当前实现偏差清单（代码核查结论）
-以下条目是“当前代码与目标约束/方案之间的差距”，用于指导后续重构，非已实现能力。
+| 约束项 | 位置要求 | 当前实现状态 |
+|--------|----------|--------------|
+| `startReceiveRobotState()` | `startLoop(false)` 之前 | 已满足 |
+| `getStateData()` | 控制 callback 内部 | 已满足 |
+| `is_control_running_` | 类成员原子变量 | 已满足 |
+| `output.setFinished()` | callback 内部，结束时触发 | 已满足 |
+| `stopLoop -> stopMove -> stopReceiveRobotState` | 主线程监控路径触发 | 已满足 |
 
-1. `usr_rt_cartesian_v_control` 仍包含阻塞等待：`while(stopManually.load())`。
-2. `stopManually` 当前是局部变量，尚未提升为类成员状态变量（如 `is_control_running_`）。
-3. 清理流程当前在控制函数末尾同步执行，尚未迁移到主线程监控回调异步执行。
-4. 监控定时器与状态接口（如 `status_monitor_timer_`、`stop_control()`）尚未实现。
-5. 传感器共享结构（`SensorSharedData`）及对应 `try_get/update` 机制尚未实现。
-6. `MultiThreadedExecutor` 已使用，但尚未明确回调组隔离策略。
+## 1. 重构目标与结论
+### 1.1 目标
+将阻塞式控制链路重构为“非阻塞启动 + 状态监控清理”模式，避免控制回调长期占用导致的回调饥饿。
 
-## 1. 项目背景与目标
-**现状**：当前控制逻辑中，`usr_rt_cartesian_v_control` 函数内包含 `while(stopManually.load())` 阻塞等待，导致触发该控制路径的回调线程长期占用，影响 ROS 话题（传感器、键盘）处理时效。
-**问题**：
-1.  **阻塞问题**：并非 `rclcpp::spin()` 不运行，而是控制回调阻塞后，同回调组内的其他回调会出现处理饥饿，影响与传感器 ROS2 包外部 topic 的通讯时效。
-2.  **生命周期漏洞**：若直接去除 `while`，局部变量 `stopManually` 会被销毁，导致 SDK 回调访问非法内存（Segfault）。
-3.  **清理时机**：非阻塞模式下，函数立即返回，无法在函数末尾直接执行清理。
+### 1.2 当前结论
+目标已在代码层落地，核心变化如下：
+1. `usr_rt_cartesian_v_control` 已改为非阻塞返回。
+2. 控制结束信号由 callback 内状态位维护，清理由监控回调执行。
+3. 已引入共享传感器数据结构 `SensorSharedData`，控制回调通过 `try_get` 读取，失败采用 ZOH（保留上次值）。
+4. 已显式拆分键盘/传感器/监控 callback group。
 
-**目标**：重构为 **"非阻塞启动 + 状态机监控"** 模式。确保控制线程独立运行，主线程负责 ROS 通讯和生命周期管理。
+## 2. 架构与线程模型（当前实现）
+采用“ROS 通信与监控 + SDK 实时控制 + 共享数据”的三层结构：
 
-## 2. 目标系统架构设计（待实现，非当前实现）
-采用 **"ROS 主线程 (通讯+监控) + SDK 后台线程 (控制) + 共享内存"** 架构。
+1. ROS 层：
+- `MultiThreadedExecutor` 运行节点回调。
+- 键盘订阅、传感器订阅、监控定时器分属不同 callback group（均为 `MutuallyExclusive`）。
+- 监控定时器周期为 50ms（20Hz）。
 
-1.  **主线程 (Main Thread)**：
-    *   **通讯**：运行 `rclcpp::spin()`，实时接收 Sensor (400Hz) 和 Keyboard Topic。
-    *   **写入**：收到传感器数据后，写入无锁共享内存。
-    *   **监控**：通过低频定时器 (e.g., 20Hz) 监控 SDK 线程状态。若发现运动结束，执行清理序列。
-2.  **SDK 线程 (Background RT Thread)**：
-    *   以 1000Hz 频率执行控制回调。
-    *   使用 **"Try-Get"** 策略读取共享内存中的传感器数据。
-    *   运动结束时，仅标记状态位，**不执行**清理函数。
-3.  **数据共享**：
-    *   使用 `std::atomic_flag` 实现自旋锁，保护力控数据。
+2. SDK 控制层：
+- 控制回调由 `setControlLoop` 注册并通过 `startLoop(false)` 启动。
+- 轨迹结束时在 callback 内调用 `output.setFinished()` 并设置 `is_control_running_ = false`。
+- callback 内不直接执行 stop 清理。
 
-## 3. 详细实施步骤（目标改造，按文件划分）
+3. 数据共享层：
+- 新增 `SensorSharedData`（`std::array<double,6> + timestamp + atomic_flag`）。
+- 订阅回调写入 `update`。
+- 控制回调使用 `try_get`，失败时使用上一个成功值（ZOH）。
 
-### 3.1 新增：`include/rokae_node/sensor_shared_data.hpp`
-**任务**：定义线程安全的共享数据结构。
-*   **内容**：
-    *   结构体 `SensorSharedData`。
-    *   成员：`std::array<double, 6> force_torque`，`std::chrono::steady_clock::time_point timestamp`，`std::atomic_flag lock`。
-    *   方法 `update(...)`: 自旋获取锁 -> 写入数据 -> 释放锁。
-    *   方法 `try_get(...)`: `test_and_set` 尝试获取锁 -> 成功则拷贝并返回 true -> 失败返回 false (实现 ZOH 零阶保持)。
+## 3. 文件级实现映射
+### 3.1 新增文件
+- `include/rokae_node/sensor_shared_data.hpp`
+  - 新增 `SensorSharedData`。
+  - 提供 `update(...)` 与 `try_get(...)`。
 
-### 3.2 修改：`include/rokae_node/rokae_move_node.hpp`
-**任务**：增加监控定时器和共享数据对象。
-*   **新增成员**：
-    *   `SensorSharedData sensor_data_;` (实例化共享数据)
-    *   `rclcpp::TimerBase::SharedPtr status_monitor_timer_;` (状态监控定时器)
-*   **修改函数**：
-    *   将 `z_force_callback` 替换为 `void sensor_callback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg);`
-    *   新增 `void monitor_loop_callback();` (用于检测机器人是否需要清理)
+### 3.2 控制器接口改造
+- `include/rokae_node/rokae_robot_controller.hpp`
+  - 构造函数增加 `SensorSharedData* shared_data`。
+  - 新增成员：`is_control_running_`、`cleanup_needed_`、`stop_control_mutex_`、`shared_data_`。
+  - 新增接口：`is_running()`、`needs_cleanup()`、`stop_control()`。
 
-### 3.3 修改：`src/rokae_move_node.cpp`
-**任务**：实现 ROS 数据转发与状态监控。
-*   **构造函数**：
-    *   初始化 `RobotController` 时，将 `&sensor_data_` 指针传递给它。
-    *   创建 `status_monitor_timer_` (建议 20Hz/50ms)，绑定到 `monitor_loop_callback`。
-    *   订阅 `/force_sensor_x` 等话题，绑定到 `sensor_callback`。
-*   **`sensor_callback`**：
-    *   解析 ROS 消息。
-    *   调用 `sensor_data_.update(...)` 写入最新数据。
-*   **`monitor_loop_callback`**：
-    *   检查 `robot_controller_->is_running()` 是否为 `false`。
-    *   检查 `robot_controller_->needs_cleanup()` 是否为 `true`（防止重复清理）。
-    *   若满足条件：调用 `robot_controller_->stop_control()` 并重置标志位。
+- `src/rokae_robot_controller.cpp`
+  - `usr_rt_cartesian_v_control`：
+    1. 移除阻塞 `while(stopManually)`。
+    2. 启动前设置 `is_control_running_ = true`、`cleanup_needed_ = true`。
+    3. `startLoop(false)` 后立即返回。
+  - SDK callback：
+    1. 使用 `shared_data_->try_get(...)` 读取外部传感器数据。
+    2. 结束条件仅执行 `output.setFinished()` 与状态位更新。
+  - `stop_control()`：
+    1. 幂等检查 `cleanup_needed_`。
+    2. 按顺序执行 `stopLoop -> stopMove -> stopReceiveRobotState`。
+    3. 重置发布定时器并清空清理标志。
 
-### 3.4 修改：`include/rokae_node/rokae_robot_controller.hpp`
-**任务**：提升状态标志位为成员变量，提供清理接口。
-*   **新增成员**：
-    *   `SensorSharedData* shared_data_;` (持有共享数据指针)
-    *   `std::atomic<bool> is_control_running_{false};` (替代原局部变量 `stopManually`)
-    *   `std::atomic<bool> cleanup_needed_{false};` (通知主线程进行清理)
-*   **新增/修改接口**：
-    *   构造函数接收 `SensorSharedData*`。
-    *   `bool is_running() const`。
-    *   `bool needs_cleanup() const`。
-    *   `void stop_control()` (封装 stopLoop, stopMove, stopReceiveRobotState)。
+### 3.3 节点通信与监控改造
+- `include/rokae_node/rokae_move_node.hpp`
+  - 新增：`SensorSharedData sensor_data_`、`status_monitor_timer_`。
+  - 新增回调：`sensor_callback(...)`、`monitor_loop_callback()`。
+  - 新增 callback group 与 `WrenchStamped` 订阅成员。
 
-### 3.5 修改：`src/rokae_robot_controller.cpp`
-**任务**：重构控制函数为非阻塞模式。
-*   **`usr_rt_cartesian_v_control` 重构**：
-    1.  **移除** `while(stopManually.load())` 及其后的清理代码。
-    2.  设置 `is_control_running_ = true` 和 `cleanup_needed_ = true`。
-    3.  调用 `rtCon_->startLoop(false)`。
-    4.  **立即 return** (非阻塞)。
-*   **SDK 回调 (Lambda) 修改**：
-    1.  **数据读取**：使用 `shared_data_->try_get(...)` 替换原有逻辑。
-    2.  **退出条件**：当轨迹结束 (`index >= size`) 时：
-        *   执行 `output.setFinished()`。
-        *   设置 `is_control_running_ = false`。
-        *   **绝对不要**在这里调用 `stopLoop`。
-*   **新增 `stop_control` 实现**：
-    1.  执行 `rtCon_->stopLoop()`。
-    2.  执行 `rtCon_->stopMove()`。
-    3.  执行 `robot_->stopReceiveRobotState()`。
-    4.  重置相关的 Timer (如果有)。
-    5.  打印 "Control Loop Stopped & Cleaned up"。
+- `src/rokae_move_node.cpp`
+  - `RobotController` 构造传入 `&sensor_data_`。
+  - 新建 callback group：键盘 / 传感器 / 监控。
+  - `sensor_callback` 将 `WrenchStamped` 写入共享数据。
+  - `monitor_loop_callback` 检测 `!is_running && needs_cleanup` 后执行 `stop_control()`。
 
-## 4. 关键配置要求（目标状态）
-*   **QoS**: 全链路 (Sensor -> Robot) 使用 **BEST_EFFORT** + **VOLATILE**。
-*   **编译**: 确保 CMake 链接 `pthread`。
+## 4. 配置与依赖状态
+### 4.1 QoS（当前实现）
+- 键盘订阅：`RELIABLE + VOLATILE`。
+- 传感器订阅：`BEST_EFFORT + VOLATILE`。
+- 实时状态发布：`BEST_EFFORT + VOLATILE`。
 
-## 5. 验收测试标准（重构完成后）
-1.  **非阻塞验证**：启动控制后，主线程仍能响应键盘 `keystroke` 话题，且终端不卡死。
-2.  **清理验证**：轨迹运行结束后，程序应自动打印 "Control Loop Stopped & Cleaned up"，且机械臂停止在目标位置，无报错。
-3.  **实时响应**：在运动过程中，人为触发传感器力阈值，机械臂应能立即响应（切换轨迹或急停）。
+### 4.2 构建依赖（已补齐）
+- `CMakeLists.txt`：
+  - 新增 `find_package(geometry_msgs REQUIRED)`。
+  - 新增 `find_package(rcl_interfaces REQUIRED)`。
+  - 新增 `find_package(Threads REQUIRED)` 并链接 `Threads::Threads`。
+- `package.xml`：
+  - 新增 `geometry_msgs`、`rcl_interfaces`、`tf2`、`moveit_ros_planning_interface`。
+
+## 5. 待实机验收项（由操作者执行）
+以下结果需在 Ubuntu 20.04 + ROS2 + 实机环境回填：
+
+1. 非阻塞验证
+- 步骤：启动速度控制后，连续发送键盘 `keystroke`。
+- 预期：节点持续响应，无“卡死等待”现象。
+- 结果：`[待回填]`
+
+2. 自动清理验证
+- 步骤：轨迹自然结束，观察日志与机器人状态。
+- 预期：出现 `Control Loop Stopped & Cleaned up`，机器人停稳且无异常报错。
+- 结果：`[待回填]`
+
+3. 力触发切换验证
+- 步骤：运动中施加超过阈值的外力输入。
+- 预期：触发轨迹切换或相应保护行为，响应无明显延迟。
+- 结果：`[待回填]`
+
+## 6. 当前限制与说明
+1. 当前对接话题为 `/force_sensor_z`（`WrenchStamped`），若需三轴独立输入（`/force_sensor_x/y/z`）需补充聚合逻辑。
+2. 本轮仅完成代码与文档对齐，未在当前 Windows 沙箱完成 ROS 依赖下的编译和实机测试。
+3. 后续若修改 stop 逻辑，必须保持“SDK callback 不做 stop 清理”的边界。
+

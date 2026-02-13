@@ -69,3 +69,48 @@
 | 时间戳 | 错误 | 尝试次数 | 处理 |
 |--------|------|----------|------|
 | 2026-02-12 | `session-catchup.py` 在 `.claude` 预期路径不存在 | 1 | 改为手动读取三份 planning 文件恢复上下文 |
+
+## 会话：2026-02-13
+
+### 阶段 3：接口改造设计（实现完成）
+- **状态：** complete
+- **操作记录：**
+  - 新增 `include/rokae_node/sensor_shared_data.hpp`。
+  - 修改 `include/rokae_node/rokae_robot_controller.hpp`：新增控制状态原子成员与监控接口。
+  - 修改 `include/rokae_node/rokae_move_node.hpp`：新增共享数据实例、监控定时器、传感器回调与 callback group 成员。
+- **变更文件：**
+  - `include/rokae_node/sensor_shared_data.hpp`
+  - `include/rokae_node/rokae_robot_controller.hpp`
+  - `include/rokae_node/rokae_move_node.hpp`
+
+### 阶段 4：控制链路重构（实现完成）
+- **状态：** complete
+- **操作记录：**
+  - 修改 `src/rokae_robot_controller.cpp`，移除 `while(stopManually)` 阻塞路径。
+  - 新增 `stop_control()` 幂等清理函数，并由监控路径触发。
+  - 控制回调中接入 `SensorSharedData::try_get`，失败时复用上次值（ZOH）。
+  - 修改 `src/rokae_move_node.cpp`，新增 `monitor_loop_callback()`，检测完成态后执行清理。
+- **变更文件：**
+  - `src/rokae_robot_controller.cpp`
+  - `src/rokae_move_node.cpp`
+
+### 阶段 5：配置与验收（部分完成）
+- **状态：** in_progress
+- **操作记录：**
+  - 修改 QoS：传感器与实时数据发布采用 `BEST_EFFORT + VOLATILE`。
+  - 修改 `CMakeLists.txt`：补齐 `geometry_msgs`、`rcl_interfaces`、`Threads::Threads`。
+  - 修改 `package.xml`：补齐 `geometry_msgs`、`rcl_interfaces`、`tf2`、`moveit_ros_planning_interface` 依赖。
+- **变更文件：**
+  - `CMakeLists.txt`
+  - `package.xml`
+
+## 新增测试记录
+| 测试 | 输入 | 预期 | 实际 | 状态 |
+|------|------|------|------|------|
+| 关键符号自检 | `rg` 检索阻塞循环与清理路径 | 不再出现 `while(stopManually)`，存在监控清理链路 | 符合预期 | 通过 |
+| 接口连通性自检 | `rg` 检索构造签名、monitor/sensor接口 | 新增接口在声明与实现中一致 | 符合预期 | 通过 |
+
+## 新增错误日志
+| 时间戳 | 错误 | 尝试次数 | 处理 |
+|--------|------|----------|------|
+| 2026-02-13 | `cmake -S . -B build` 失败：缺少 `Eigen3Config.cmake` | 1 | 记录为环境依赖缺失，待 Ubuntu 20.04 + ROS2 依赖齐全环境执行完整编译验收 |

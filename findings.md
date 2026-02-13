@@ -70,3 +70,14 @@
 ### 四、最终判断
 - 在补齐上述前置条件后，阶段 3~5 的既定方案可以解决 PRD 中“现状/问题”描述的核心矛盾。
 - 该方案在现有代码结构上可最小侵入演进，不要求推翻现有轨迹生成与控制逻辑。
+
+## 实施落地记录（2026-02-13）
+- 已新增 `include/rokae_node/sensor_shared_data.hpp`，提供 `update/try_get`，并使用 `atomic_flag` 实现 try-lock + ZOH 读取模式。
+- `RobotController` 已接入状态原子变量：`is_control_running_` 与 `cleanup_needed_`，并新增 `is_running()`、`needs_cleanup()`、`stop_control()`。
+- `usr_rt_cartesian_v_control` 已移除阻塞等待，改为 `startLoop(false)` 后立即返回。
+- SDK 控制回调结束路径已改为仅 `output.setFinished()` + 状态位切换，清理逻辑迁移到监控回调触发的 `stop_control()`。
+- `Rokae_Move` 已新增 `status_monitor_timer_`（50ms）与 `monitor_loop_callback()`，用于检测 `!is_running && needs_cleanup` 并执行收尾。
+- 传感器回调已改为 `geometry_msgs::msg::WrenchStamped`，并写入 `SensorSharedData`；控制回调中已接入 `try_get` 与 ZOH。
+- 回调组已显式拆分为键盘/传感器/监控三个 `MutuallyExclusive` callback group，避免互相饥饿。
+- QoS 已落地：传感器链路与实时数据发布改为 `BEST_EFFORT + VOLATILE`；键盘指令保持 `RELIABLE + VOLATILE`。
+- 构建依赖已补齐：`geometry_msgs`、`rcl_interfaces`，并在 `CMakeLists.txt` 增加 `Threads::Threads` 链接。

@@ -1,6 +1,7 @@
 #include "rokae_node/rokae_move_node.hpp"
 #include "rokae_move/robot.h"
 #include "rokae_move/motion_control_rt.h"
+#include "rcl_interfaces/msg/parameter_descriptor.hpp"
 
 
 
@@ -25,7 +26,7 @@ Rokae_Move::Rokae_Move(std::string name) : Node(name)
 
     // 创建并初始化机器人控制器，将硬件连接和当前节点指针传给它
     if (robot && rtCon) {
-        robot_controller_ = std::make_unique<RobotController>(robot, rtCon, this);
+        robot_controller_ = std::make_unique<RobotController>(robot, rtCon, this, &sensor_data_);
     } else {
         RCLCPP_FATAL(this->get_logger(), "Robot SDK objects 不存在，初始化可能失败, 无法创建 RobotController.");
         rclcpp::shutdown();
@@ -63,6 +64,13 @@ Rokae_Move::~Rokae_Move()
  */
 void Rokae_Move::setup_ros_communications()
 {
+    keyboard_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    sensor_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    monitor_callback_group_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+    auto command_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable().durability_volatile();
+    auto sensor_qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
+    auto telemetry_qos = rclcpp::QoS(rclcpp::KeepLast(10)).best_effort().durability_volatile();
 
     /** 
     * @brief 通用浮点参数描述生成器。用于rqt等界面显示参数信息
@@ -123,33 +131,39 @@ void Rokae_Move::setup_ros_communications()
     this->declare_parameter("gamma_angle", 10.00,
         floatDesc("对角线Z-Y平面角度（度，0=Y轴负方向，90=Z轴负方向）", 0.00, 90.00, 0.01));
 
-    // 订阅键盘输入
-    keyborad = this->create_subscription<std_msgs::msg::String>("/keystroke", 10, std::bind(&Rokae_Move::keyborad_callback, this, std::placeholders::_1));
+    rclcpp::SubscriptionOptions keyboard_sub_options;
+    keyboard_sub_options.callback_group = keyboard_callback_group_;
+    keyborad = this->create_subscription<std_msgs::msg::String>(
+        "/keystroke",
+        command_qos,
+        std::bind(&Rokae_Move::keyborad_callback, this, std::placeholders::_1),
+        keyboard_sub_options);
 
-    // // 订阅
-    // // 订阅 force_sensor_data 话题topic，使force_subscription_指向本订阅者(智能指针)
-    // z_force_subscription_ = this->create_subscription<std_msgs::msg::Float32>(
-    //     "force_sensor_z", // 要订阅的topic的名称
-    //     10, // 队列深度（QoS）。表示最多缓存多少条未处理的消息。
-    //     std::bind(&Rokae_Move::z_force_callback, this, std::placeholders::_1)); // 回调函数。当订阅收到消息时，就会调用这个回调函数
+    rclcpp::SubscriptionOptions sensor_sub_options;
+    sensor_sub_options.callback_group = sensor_callback_group_;
+    sensor_subscription_ = this->create_subscription<geometry_msgs::msg::WrenchStamped>(
+        "/force_sensor_z",
+        sensor_qos,
+        std::bind(&Rokae_Move::sensor_callback, this, std::placeholders::_1),
+        sensor_sub_options);
     
     // 发布
     // 添加实时位姿数据发布者
     realtime_pose_publisher_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
         "realtime_robot_pose", // 要发布的topic的名称 
-        10); // 队列深度（QoS）。表示最多缓存多少条未处理的消息。
+        telemetry_qos); // 队列深度（QoS）。表示最多缓存多少条未处理的消息。
 
     realtime_extTau_publisher_ = this->create_publisher<std_msgs::msg::Float32MultiArray>( 
         "realtime_robot_extTau", 
-        10); 
+        telemetry_qos); 
 
     realtime_poseAndextTau_publisher_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
         "realtime_robot_poseAndextTau",
-        10);
+        telemetry_qos);
 
     realtime_poseAndTargetPose_publisher_ = this->create_publisher<std_msgs::msg::Float32MultiArray>(
         "realtime_robot_poseAndTargetPose",
-        10);
+        telemetry_qos);
 
     // 定时器原理：每隔设定的时间周期，就会调用一次指定的回调函数，回调函数中还可以进一步调用其他函数，例如调用发布函数，发布的相关数据都与最终调用的发布函数有关
     // 创建位姿数据发布定时器(10Hz)
@@ -164,6 +178,11 @@ void Rokae_Move::setup_ros_communications()
     poseAndextTau_timer_ = this->create_wall_timer(
         std::chrono::milliseconds(10),
         std::bind(&Rokae_Move::publish_initial_poseAndextTau, this));
+
+    status_monitor_timer_ = this->create_wall_timer(
+        std::chrono::milliseconds(50),
+        std::bind(&Rokae_Move::monitor_loop_callback, this),
+        monitor_callback_group_);
 
 }
 
@@ -372,11 +391,28 @@ std::array<double, 6UL> Rokae_Move::string_to_array(const std::string &str)
  * @brief 力数据订阅回调函数，用来获取最新的力数据                                          未使用
  * @param msg 力数据消息
  */
-void Rokae_Move::z_force_callback(const std_msgs::msg::Float32::SharedPtr msg)
+void Rokae_Move::sensor_callback(const geometry_msgs::msg::WrenchStamped::SharedPtr msg)
 {
-    latest_force_z_.store(msg->data); 
-    // RCLCPP_INFO(this->get_logger(), "接收到力数据: %.2f N", msg->data);
-    // RCLCPP_INFO(this->get_logger(), "=================ros订阅者接收到力数据: %.2f N=====================", latest_force_z_.load());
+    std::array<double, 6> force_torque = {
+        msg->wrench.force.x,
+        msg->wrench.force.y,
+        msg->wrench.force.z,
+        msg->wrench.torque.x,
+        msg->wrench.torque.y,
+        msg->wrench.torque.z
+    };
+    latest_force_z_.store(force_torque[2], std::memory_order_relaxed);
+    sensor_data_.update(force_torque, std::chrono::steady_clock::now());
+}
+
+void Rokae_Move::monitor_loop_callback()
+{
+    if (!robot_controller_) {
+        return;
+    }
+    if (!robot_controller_->is_running() && robot_controller_->needs_cleanup()) {
+        robot_controller_->stop_control();
+    }
 }
 
 // 让这个函数去检查力阈值，然后让callback来调用这个函数，这个函数应该返回一个bool。              未使用

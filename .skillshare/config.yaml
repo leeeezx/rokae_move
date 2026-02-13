@@ -1,0 +1,7 @@
+targets:
+    - agents
+skills:
+    - name: planning-with-files
+      source: github.com/OthmanAdi/planning-with-files/.codex/skills/planning-with-files
+audit:
+    block_threshold: CRITICAL

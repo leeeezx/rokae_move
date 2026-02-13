@@ -28,7 +28,10 @@ find_package(tf2 REQUIRED)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(rcl_interfaces REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
+find_package(Threads REQUIRED)
 # find_package(moveit_visual_tools REQUIRED)
 
 if(BUILD_TESTING)
@@ -61,7 +64,10 @@ add_executable(rokae_move_node
 ament_target_dependencies(rokae_move_node  
   "moveit_ros_planning_interface"  
   rclcpp 
-  std_msgs Eigen3
+  std_msgs
+  geometry_msgs
+  rcl_interfaces
+  Eigen3
   tf2)
 
 # 链接外部库：  xCoreSDK xMateModel
@@ -69,6 +75,7 @@ target_link_libraries(rokae_move_node
   ${SHARED} 
   xCoreSDK
   xMateModel
+  Threads::Threads
 )
 
 

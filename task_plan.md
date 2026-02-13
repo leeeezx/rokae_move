@@ -4,7 +4,7 @@
 在严格遵守 SDK 调用约束的前提下，把当前阻塞式 `usr_rt_cartesian_v_control` 重构为“非阻塞启动 + 主线程监控清理”模式，并同步修订 PRD 使其与代码现状和目标边界一致。
 
 ## 当前阶段
-阶段 3
+阶段 5
 
 ## 分阶段计划
 
@@ -21,25 +21,25 @@
 - **状态：** complete
 
 ### 阶段 3：接口改造设计（头文件）
-- [ ] 新增 `SensorSharedData` 结构（共享内存 + try_get）
-- [ ] 在 `RobotController` 增加 `is_control_running_`、`cleanup_needed_`、`stop_control()`、查询接口
-- [ ] 在 `Rokae_Move` 增加 `status_monitor_timer_`、`sensor_callback()`、`monitor_loop_callback()`
-- [ ] 明确回调组策略，避免阻塞影响键盘/传感器回调
-- **状态：** in_progress
+- [x] 新增 `SensorSharedData` 结构（共享内存 + try_get）
+- [x] 在 `RobotController` 增加 `is_control_running_`、`cleanup_needed_`、`stop_control()`、查询接口
+- [x] 在 `Rokae_Move` 增加 `status_monitor_timer_`、`sensor_callback()`、`monitor_loop_callback()`
+- [x] 明确回调组策略，避免阻塞影响键盘/传感器回调
+- **状态：** complete
 
 ### 阶段 4：控制链路重构（源文件）
-- [ ] `usr_rt_cartesian_v_control` 移除阻塞 `while(stopManually)`
-- [ ] 回调内仅 `output.setFinished()` + 状态位切换，不直接做 stop 清理
-- [ ] 主线程定时器检测完成态并执行 `stopLoop -> stopMove -> stopReceiveRobotState`
-- [ ] 接入传感器共享数据读取（try_get，失败走 ZOH）
-- **状态：** pending
+- [x] `usr_rt_cartesian_v_control` 移除阻塞 `while(stopManually)`
+- [x] 回调内仅 `output.setFinished()` + 状态位切换，不直接做 stop 清理
+- [x] 主线程定时器检测完成态并执行 `stopLoop -> stopMove -> stopReceiveRobotState`
+- [x] 接入传感器共享数据读取（try_get，失败走 ZOH）
+- **状态：** complete
 
 ### 阶段 5：配置与验收
-- [ ] 明确 QoS（BEST_EFFORT + VOLATILE）并统一链路
-- [ ] 校验 CMake 线程链接策略（按平台与依赖实际需要）
+- [x] 明确 QoS（BEST_EFFORT + VOLATILE）并统一链路
+- [x] 校验 CMake 线程链接策略（按平台与依赖实际需要）
 - [ ] 执行“非阻塞/自动清理/力触发切换”三项验收
 - [ ] 更新 PRD 为“已实现状态”版本
-- **状态：** pending
+- **状态：** in_progress
 
 ## 关键问题
 1. 是否要求 `stop_control()` 仅由 ROS 定时器触发，且完全禁止在控制函数异常路径中直接调用？
@@ -56,7 +56,7 @@
 ## 错误记录
 | 错误 | 尝试次数 | 解决 |
 |------|----------|------|
-| 暂无 | 1 | - |
+| `cmake -S . -B build` 缺少 `Eigen3Config.cmake` | 1 | 当前终端非 Ubuntu ROS2 依赖环境，先完成代码改造并保留待 Ubuntu 实机验证 |
 
 ## 备注
 - 每完成一个阶段都要更新状态与偏差。

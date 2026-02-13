@@ -16,14 +16,59 @@ using namespace std;
  */
 RobotController::RobotController(std::shared_ptr<xMateErProRobot> robot,
                                  std::shared_ptr<RtMotionControlCobot<7U>> rtCon,
-                                 Rokae_Move* node)
-    : robot_(robot), rtCon_(rtCon), node_(node)
+                                 Rokae_Move* node,
+                                 SensorSharedData* shared_data)
+    : robot_(robot), rtCon_(rtCon), node_(node), shared_data_(shared_data)
 {
     RCLCPP_INFO(node_->get_logger(), "RobotController初始化完成");
 }
 
 RobotController::~RobotController() {
     RCLCPP_INFO(node_->get_logger(), "RobotController is being destroyed.");
+}
+
+bool RobotController::is_running() const {
+    return is_control_running_.load(std::memory_order_acquire);
+}
+
+bool RobotController::needs_cleanup() const {
+    return cleanup_needed_.load(std::memory_order_acquire);
+}
+
+void RobotController::stop_control() {
+    std::lock_guard<std::mutex> lock(stop_control_mutex_);
+    if (!cleanup_needed_.load(std::memory_order_acquire)) {
+        return;
+    }
+
+    is_control_running_.store(false, std::memory_order_release);
+
+    auto safe_call = [this](const char* name, const std::function<void()>& fn) {
+        try {
+            fn();
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(node_->get_logger(), "%s 失败: %s", name, e.what());
+        }
+    };
+
+    safe_call("stopLoop", [this]() { rtCon_->stopLoop(); });
+    safe_call("stopMove", [this]() { rtCon_->stopMove(); });
+    safe_call("stopReceiveRobotState", [this]() { robot_->stopReceiveRobotState(); });
+
+    if (node_->pose_timer_) {
+        node_->pose_timer_->reset();
+    }
+    if (node_->extTau_timer_) {
+        node_->extTau_timer_->reset();
+    }
+    if (node_->poseAndextTau_timer_) {
+        node_->poseAndextTau_timer_->reset();
+    }
+
+    force_trigger_.store(false, std::memory_order_release);
+    trajectory_state_.store(TrajectoryState::INITIAL_TRAJECTORY, std::memory_order_release);
+    cleanup_needed_.store(false, std::memory_order_release);
+    RCLCPP_INFO(node_->get_logger(), "Control Loop Stopped & Cleaned up");
 }
 
 
@@ -45,6 +90,10 @@ void RobotController::usr_rt_cartesian_v_control(
     double y_target_speed, int y_direction)
     {
         try {
+            if (is_control_running_.load(std::memory_order_acquire)) {
+                RCLCPP_WARN(node_->get_logger(), "已有控制循环正在运行，本次启动请求已忽略");
+                return;
+            }
             // 参数校验，传入的距离和速度必须大于等于0
             const double EPSILON = 1e-10;
             if(z_air_dist <= EPSILON || z_cruise_dist <= EPSILON || z_decel_dist <= EPSILON || z_target_speed <= EPSILON) {
@@ -104,13 +153,16 @@ void RobotController::usr_rt_cartesian_v_control(
             // 启动笛卡尔空间位置控制模式
             rtCon_->startMove(RtControllerMode::cartesianPosition);
             
-            std::atomic<bool> stopManually{true}; // 停止标志。厂家示例中出现的标准形式。如果为false就会跳出while循环，然后执行一系列停止命令
+            is_control_running_.store(true, std::memory_order_release);
+            cleanup_needed_.store(true, std::memory_order_release);
+
             int index = 0; // 轨迹1的索引
 
             double time = 0.0; // 轨迹2的计算频率数值
             std::array<double, 6> tra2_start_pose; // 轨迹2的实时起点 ,array6D
             std::array<double, 16> tra2_start_pose_m; //轨迹2的实时起点，array16D行优先矩阵
             bool tra2_init = false; // 轨迹2的起点初始化标志.默认为false，如果初始化成功则为true
+            double sensor_force_z_zoh = 0.0;
 
             const double total_lift = 0.20; // 轨迹2的上升总距离，单位m。
             const double lift_duration_time = 16.0; // 轨迹2的上升持续时间,单位s。
@@ -127,6 +179,15 @@ void RobotController::usr_rt_cartesian_v_control(
                 CartesianPosition output{}; // CartesianPosition output{}是给output进行类型定义
                 
                 robot_->getStateData(RtSupportedFields::tauExt_inBase, latest_current_ext_tau_base_);
+                double trigger_force_z = latest_current_ext_tau_base_[2];
+                if (shared_data_ != nullptr) {
+                    std::array<double, 6> sensor_force_torque{};
+                    std::chrono::steady_clock::time_point sensor_timestamp;
+                    if (shared_data_->try_get(sensor_force_torque, sensor_timestamp)) {
+                        sensor_force_z_zoh = sensor_force_torque[2];
+                    }
+                    trigger_force_z = sensor_force_z_zoh;
+                }
                 
                 // 时间触发检测。测试有效，但是触发后切换较慢。保留作参考/备用
                 // callback_count++;
@@ -139,7 +200,7 @@ void RobotController::usr_rt_cartesian_v_control(
                 
 
                 // 检测：力阈值触发标志 与 轨迹状态。当力触发状态为真且当前轨迹为初始轨迹时，
-                if (latest_current_ext_tau_base_[2] > FORCE_THRESHOLD && trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY){ 
+                if (trigger_force_z > FORCE_THRESHOLD && trajectory_state_.load() == TrajectoryState::INITIAL_TRAJECTORY){ 
                     RCLCPP_INFO(node_->get_logger(), "======================达到力阈值，触发轨迹切换请求,运行新轨迹======================");
                     
                     trajectory_state_.store(TrajectoryState::TRAJECTORY_2); // 切换轨迹状态为轨迹2
@@ -159,7 +220,7 @@ void RobotController::usr_rt_cartesian_v_control(
                         tra2_init = false;
                         RCLCPP_ERROR(node_->get_logger(), "无效的轨迹索引，无法切换轨迹！");
                         output.setFinished();
-                        stopManually.store(false);
+                        is_control_running_.store(false, std::memory_order_release);
                     }
                 }
 
@@ -194,7 +255,7 @@ void RobotController::usr_rt_cartesian_v_control(
                         index++;
                     } else {
                         output.setFinished();
-                        stopManually.store(false);
+                        is_control_running_.store(false, std::memory_order_release);
                     }
                 }else{
                     try{
@@ -202,7 +263,7 @@ void RobotController::usr_rt_cartesian_v_control(
                         if (!tra2_init) {
                         RCLCPP_ERROR(node_->get_logger(), "轨迹2未初始化!");
                         output.setFinished();
-                        stopManually.store(false);
+                        is_control_running_.store(false, std::memory_order_release);
                         return output;
                         } 
     
@@ -243,13 +304,13 @@ void RobotController::usr_rt_cartesian_v_control(
                         if(time > lift_duration_time){
                             RCLCPP_INFO(node_->get_logger(), "轨迹2超时结束");
                             output.setFinished();
-                            stopManually.store(false);
+                            is_control_running_.store(false, std::memory_order_release);
                         }
 
                     }catch(const std::exception& e) {
                         RCLCPP_ERROR(node_->get_logger(), "轨迹2执行错误: %s", e.what());
                         output.setFinished();
-                        stopManually.store(false);
+                        is_control_running_.store(false, std::memory_order_release);
                         return output;
                     }
                 }
@@ -260,39 +321,12 @@ void RobotController::usr_rt_cartesian_v_control(
             // 设置控制循环回调函数
             rtCon_->setControlLoop(callback, 0, true); // setControlLoop的返回值只能为关节角度/笛卡尔位姿/力矩
             rtCon_->startLoop(false); // 启动循环
-
-            // 控制循环进行
-            while(stopManually.load()) {
-                // std::this_thread::sleep_for(std::chrono::milliseconds(1)); 
-            }
-            
-            // std::array<double, 16> reset_matrix = {
-            // 1, 0, 0, 0, 
-            // 0, 1, 0, 0, 
-            // 0, 0, 1, 0, 
-            // 0, 0, 0, 1
-            // };
-            // rtCon_->setFcCoor(reset_matrix, FrameType::world, ec_);
-            rtCon_->stopLoop();
-            rtCon_->stopMove();
-            robot_->stopReceiveRobotState(); // 停止接收机器人状态数据
-            node_->pose_timer_->reset();
-            node_->extTau_timer_->reset();
-            node_->poseAndextTau_timer_->reset();
-            RCLCPP_INFO(node_->get_logger(), "实时轨迹控制完成");
-            // ============ 退出时再次重置状态 ============
-            force_trigger_.store(false);
-            trajectory_state_.store(TrajectoryState::INITIAL_TRAJECTORY);
+            RCLCPP_INFO(node_->get_logger(), "实时轨迹控制已非阻塞启动，后续由监控定时器执行清理");
 
         } catch (const std::exception &e) {
-            node_->pose_timer_->reset();
-            node_->extTau_timer_->reset();
-            node_->poseAndextTau_timer_->reset();
-            robot_->stopReceiveRobotState(); // 确保停止接收数据
-            rtCon_->stopLoop();
-            rtCon_->stopMove();
-            force_trigger_.store(false);
-            trajectory_state_.store(TrajectoryState::INITIAL_TRAJECTORY);
+            is_control_running_.store(false, std::memory_order_release);
+            cleanup_needed_.store(true, std::memory_order_release);
+            stop_control();
             RCLCPP_ERROR(node_->get_logger(), "实时轨迹控制错误: %s", e.what());
         }
     }

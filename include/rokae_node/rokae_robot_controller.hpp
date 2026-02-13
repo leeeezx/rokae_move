@@ -4,11 +4,14 @@
 #include "rokae_move/robot.h"
 #include "rokae_move/motion_control_rt.h"
 #include "rokae_move/utility.h"
+#include "rokae_node/sensor_shared_data.hpp"
 
 #include <functional>
 #include <memory>
 #include <vector>
 #include <array>
+#include <atomic>
+#include <mutex>
 
 class TrajectoryGenerator; 
 class Rokae_Move;
@@ -29,7 +32,8 @@ public:
      */
     RobotController(std::shared_ptr<rokae::xMateErProRobot> robot,
                     std::shared_ptr<rokae::RtMotionControlCobot<7U>> rtCon,
-                    Rokae_Move* node);
+                    Rokae_Move* node,
+                    SensorSharedData* shared_data);
     /**
      * @brief 析构函数，确保资源正确释放
      */
@@ -57,6 +61,9 @@ public:
                                             double diagonal_air_dist, double diagonal_cruise_dist, double diagonal_decel_dist, double diagonal_target_speed,
                                             double gamma_deg);
     void usr_rt_stationary_control(double hold_duration);
+    bool is_running() const;
+    bool needs_cleanup() const;
+    void stop_control();
 
 private:
     // 指向机械臂和实时控制器的共享指针
@@ -65,9 +72,13 @@ private:
     std::error_code ec_;
 
     Rokae_Move* node_; 
+    SensorSharedData* shared_data_{nullptr};
 
 
     std::atomic<int> publish_counter_{0}; // 计数器，用于控制回调函数内数据发布频率
+    std::atomic<bool> is_control_running_{false};
+    std::atomic<bool> cleanup_needed_{false};
+    std::mutex stop_control_mutex_;
     
     std::mutex force_data_mutex_;
     std::array<double, 3> latest_force_data_{{0.0, 0.0, 0.0}};
